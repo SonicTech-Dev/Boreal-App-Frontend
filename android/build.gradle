@@ -1,3 +1,4 @@
+// android/build.gradle
 buildscript {
     ext {
         buildToolsVersion = "36.0.0"
@@ -5,17 +6,33 @@ buildscript {
         compileSdkVersion = 36
         targetSdkVersion = 36
         ndkVersion = "27.1.12297006"
-        kotlinVersion = "2.1.20"
+        kotlinVersion = "1.8.21" // stable Kotlin, adjust if you require different
     }
+
     repositories {
         google()
         mavenCentral()
+        maven { url "https://jitpack.io" }
     }
+
+    // Use an AGP compatible with your Gradle wrapper. Adjust if your wrapper uses a different version.
     dependencies {
-        classpath("com.android.tools.build:gradle")
+        classpath("com.android.tools.build:gradle:7.4.2")
         classpath("com.facebook.react:react-native-gradle-plugin")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
+        classpath("com.google.gms:google-services:4.3.15")
     }
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+// Ensure subprojects use modern repositories (avoid jcenter() helper)
+subprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://jitpack.io" }
+        // fallback to jcenter mirror only if required by some dependency
+        maven { url "https://jcenter.bintray.com/" }
+    }
+}

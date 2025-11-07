@@ -181,7 +181,7 @@ const IndicatorApp = ({ route, navigation }) => {
             if (threshold !== null && numeric > threshold) {
               setIndicatorColor('#b10303');
             } else {
-              setIndicatorColor('#25a714ff');
+              setIndicatorColor('#16b800');
             }
           } else {
             // if not numeric, still set the big indicator raw value as string
@@ -265,7 +265,7 @@ const IndicatorApp = ({ route, navigation }) => {
     if (threshold !== null && isPPM && !Number.isNaN(numeric) && numeric > threshold) {
       valueStyle = { color: '#b10303', fontWeight: '700' };
     } else {
-      valueStyle = { color: '#fff' };
+      valueStyle = { color: '#111' };
     }
 
     return (
@@ -319,9 +319,14 @@ const IndicatorApp = ({ route, navigation }) => {
   return (
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
       <SafeAreaView style={styles.container}>
-        {/* Logo (top-left) */}
-        <View style={styles.logoContainer}>
-          <Image style={styles.logo} source={require('../Assets/logo.png')} resizeMode="contain" />
+        {/* Logo (top-left) and Settings (top-right) */}
+        <View style={styles.topRow}>
+          <View style={styles.logoContainer}>
+            <Image style={styles.logo} source={require('../Assets/logo.png')} resizeMode="contain" />
+          </View>
+          <TouchableOpacity style={styles.topSettings} onPress={() => navigation.navigate('Settings', { serialNumber })}>
+            <Icon name="settings-outline" size={28} color="#bbb" />
+          </TouchableOpacity>
         </View>
 
         {/* Serial number (left) and online/offline (right) in same row */}
@@ -331,7 +336,7 @@ const IndicatorApp = ({ route, navigation }) => {
           </View>
           <View style={styles.statusBox}>
             <Text style={[styles.statusText, { color: connectionState.color }]}>
-              {connectionState.color === '#156f09ff' ? 'ONLINE' : 'OFFLINE'}
+              {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
             </Text>
           </View>
         </View>
@@ -349,16 +354,13 @@ const IndicatorApp = ({ route, navigation }) => {
           <Text style={{ color: indicatorColor, fontSize: 36, fontWeight: 'bold' }}>
             {losReading !== null ? (typeof losReading === 'number' ? Math.round(losReading) : String(losReading)) : '-'}
           </Text>
-          <Text style={{ color: '#bbb', fontSize: 12, marginTop: 6 }}>
-            {threshold !== null ? `Alarm threshold: ${threshold}` : 'Threshold not set'}
-          </Text>
         </View>
 
         {/* Tabs and Clear */}
         <View style={styles.switchbuttons}>
           <TouchableOpacity
             style={[styles.logs, tabStyle('live')]}
-            onPressIn={() => setActiveButton('live')}
+            onPressIn={() => { setActiveButton('live'); }}
             onPress={() => { setCurrentView('live'); setActiveButton('live'); }}
           >
             <Text style={[styles.buttonText, tabTextStyle('live')]}>Live</Text>
@@ -366,7 +368,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
           <TouchableOpacity
             style={[styles.logs, tabStyle('alarms')]}
-            onPressIn={() => setActiveButton('alarms')}
+            onPressIn={() => { setActiveButton('alarms'); }}
             onPress={() => { setCurrentView('alarms'); setActiveButton('alarms'); }}
           >
             <Text style={[styles.buttonText, tabTextStyle('alarms')]}>Alarms</Text>
@@ -377,10 +379,6 @@ const IndicatorApp = ({ route, navigation }) => {
             onPress={() => setTableData([])}
           >
             <Text style={styles.cleartext}>Clear</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.settingsIcon} onPress={() => navigation.navigate('Settings', { serialNumber })}>
-            <Icon name="settings-outline" size={26} color="#bbb" />
           </TouchableOpacity>
         </View>
 
@@ -434,7 +432,7 @@ const IndicatorApp = ({ route, navigation }) => {
                   contentContainerStyle={styles.body}
                   ListEmptyComponent={() => (
                     <Text style={{ textAlign: 'center', color: 'gray', marginTop: 20 }}>
-                      No alarms (no PPM readings above threshold)
+                      No alarms
                     </Text>
                   )}
                   initialNumToRender={10}
@@ -446,47 +444,53 @@ const IndicatorApp = ({ route, navigation }) => {
           )}
         </View>
 
-        <Text style={styles.subTextdown}>Powered by SONIC</Text>
+        {/* Powered by at bottom */}
+        <Text style={styles.powered}>Powered by SONIC</Text>
       </SafeAreaView>
     </ImageBackground>
   );
 };
 
 const styles = StyleSheet.create({
-  background: { flex: 1, width: '100%', height: '100%' ,opacity : 0.7},
+  background: { flex: 1, width: '100%', height: '100%' },
   container: {
     flex: 1,
     alignItems: 'center',
     padding: 20,
   },
 
-  /* logo top-left container */
+  /* top row contains logo (left) and settings (right) */
+  topRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   logoContainer: {
-    position: 'absolute',
-    left: 16,
-    top: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.58)',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     padding: 6,
     borderRadius: 8,
     zIndex: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 5,
-    padding: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 15,
+    marginTop: 6,
+    marginLeft: 6,
   },
   logo: {
     width: 140,
     height: 48,
     resizeMode: 'contain',
   },
+  topSettings: {
+    marginRight: 8,
+    marginTop: 6,
+    padding: 6,
+  },
 
   /* serial row: serial (left) and status (right) */
   serialRow: {
     width: '100%',
-    marginTop: 80, // leave space for logo
+    marginTop: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -496,7 +500,7 @@ const styles = StyleSheet.create({
   serialbox: {
     minWidth: 180,
     height: 46,
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
@@ -529,7 +533,7 @@ const styles = StyleSheet.create({
   /* Big indicator (dark style like original) */
   singleIndicatorContainer: {
     alignItems: 'center',
-    marginVertical: 24,
+    marginVertical: 18,
   },
   outerBezel: {
     width: 90,
@@ -626,24 +630,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: 'white',
   },
-  settingsIcon: {
-    marginLeft: 'auto',
-    paddingHorizontal: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
 
-  /* contained table: fixed width & height, dark themed */
+  /* contained table: fixed width & height, light shaded as requested */
   box: {
     width: '100%',
     alignItems: 'center',
     backgroundColor: 'transparent',
     borderRadius: 10,
     marginTop: 6,
+    flex: 0,
   },
   header: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(255,255,255,0.9)',
     paddingVertical: 10,
     borderRadius: 5,
     width: '98%',
@@ -651,8 +650,8 @@ const styles = StyleSheet.create({
   },
   tablebox: {
     width: '98%',
-    height: '33%', // fixed height for contained table
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    height: 360, // fixed height for contained table
+    backgroundColor: 'rgba(255,255,255,0.9)',
     borderRadius: 5,
     marginTop: 5,
     marginBottom: 12,
@@ -674,46 +673,46 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 14,
     fontWeight: 'bold',
-    color: 'white',
+    color: '#111',
     marginLeft: 10,
   },
   dateHead: {
     flex: 3,
     textAlign: 'left',
     paddingHorizontal: 10,
-    color: 'white',
+    color: '#111',
   },
   dataCell: {
     flex: 2,
     textAlign: 'center',
-    color: 'white',
+    color: '#111',
   },
   statusHead: {
     flex: 1,
     textAlign: 'center',
-    color: 'white',
+    color: '#111',
   },
   cell: {
     textAlign: 'center',
     fontSize: 12,
-    color: 'white',
+    color: '#111',
     marginRight: 10,
   },
   dateCell: {
     flex: 3,
     textAlign: 'left',
     paddingLeft: 10,
-    color: 'white',
+    color: '#111',
   },
   dataCell: {
     flex: 2,
     textAlign: 'center',
-    color: 'white',
+    color: '#111',
   },
   statusCell: {
     flex: 1,
     textAlign: 'center',
-    color: 'white',
+    color: '#111',
   },
 
   loadingtext: {
@@ -722,10 +721,11 @@ const styles = StyleSheet.create({
   errorText: {
     color: 'red',
   },
-  subTextdown: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.6)',
-    marginTop: 10,
+  powered: {
+    position: 'absolute',
+    bottom: 12,
+    alignSelf: 'center',
+    color: 'rgba(255,255,255,0.8)',
   },
   buttonText: {
     fontSize: 15,

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "648767242903",
+    "project_id": "boreal-app-sonic",
+    "storage_bucket": "boreal-app-sonic.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:648767242903:android:2654e7ebae102b5c339fd2",
+        "android_client_info": {
+          "package_name": "com.boreal"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHPV7vA-lCVzh05fDIn7xDOmEHrtqlvic"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
