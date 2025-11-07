@@ -13,7 +13,7 @@ export default function App({ navigation }) {
                     <View style={[styles.logoContainer, styles.elevation]}>
                         <Image 
                             style={styles.logo} 
-                            source={require('../Assets/boreal.png')} 
+                            source={require('../Assets/logo.png')} 
                             resizeMode="contain"
                         /> 
                     </View>
@@ -73,8 +73,8 @@ const styles = StyleSheet.create({
         shadowColor: '#000',
     },
     logo: {
-        width: 380,
-        height: 300,
+        width: 320,
+        height: 250,
         resizeMode: 'contain',
     },
     borealpic: {

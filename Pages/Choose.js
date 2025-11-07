@@ -10,7 +10,7 @@ export default function SerialNumberPage({ navigation }) {
 
   const fetchSerialList = async () => {
     try {
-      const res = await fetch('https://transgaz.soniciot.com/api/serial_list');
+      const res = await fetch('http://192.168.0.173:3004/api/remote_stations');
       const data = await res.json();
       if (!Array.isArray(data)) {
         console.warn('serial_list returned unexpected shape', data);
@@ -18,7 +18,7 @@ export default function SerialNumberPage({ navigation }) {
         return;
       }
 
-      const filteredData = data.filter((item) => item.category === 'transgaz');
+      const filteredData = data.filter((item) => item.category === 'boreal');
       const sortedData = filteredData.sort((a, b) => a.name.localeCompare(b.name));
       setItems(sortedData.map((item) => ({ label: item.name, value: item.serial_number })));
     } catch (error) {
@@ -52,7 +52,7 @@ export default function SerialNumberPage({ navigation }) {
 
   return (
     <ImageBackground
-      source={require('../Assets/bg.png')}
+      source={require('../Assets/bg2.png')}
       style={styles.background}
       resizeMode="cover"
     >
@@ -63,7 +63,7 @@ export default function SerialNumberPage({ navigation }) {
             name="menu"
             size={40}
             color="rgba(255, 255, 255, 0.8)"
-            onPress={() => navigation.navigate('Settings')}
+            onPress={() => navigation.navigate('Config')}
           />
         </View>
 
@@ -180,7 +180,7 @@ const styles = StyleSheet.create({
   },
   borealpic: {
     width: '99%',
-    height: '98%',
+    height: '99%',
     opacity: 0.9,
   },
   formContainer: {

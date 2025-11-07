@@ -1,349 +1,318 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Animated, StyleSheet, TouchableOpacity, Text, SafeAreaView, Image, FlatList, TextInput, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { View, StyleSheet, TouchableOpacity, Text, SafeAreaView, Image, FlatList, ActivityIndicator, Platform } from 'react-native';
 const { io } = require("socket.io-client");
 import Icon from 'react-native-vector-icons/Ionicons';
-import SignalDisplay from '../Components/signalDisplay';
-
 
 const IndicatorApp = ({ route, navigation }) => {
     const [tableData, setTableData] = useState([]);
-    const [alarmData, setAlarmData] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [indicatorColors, setIndicatorColors] = useState({});
+    // color indicates device ping status (green/red)
     const [connectionState, setConnectionState] = useState({ color: '#ff2323', serialNo: null });
-    const [isReversed, setIsReversed] = useState(false);
-    const [indicatorname, setIndicatorname] = useState(['DI1', 'DI2', 'DI3', 'DI4']);
-    const [currentView, setCurrentView] = useState('live');
-    const iconNames = ['DI1', 'DI2', 'DI3', 'DI4']
+    const [currentView, setCurrentView] = useState('live'); // 'live' | 'alarms'
     const flatListRef = useRef(null);
     const serialNumber = route.params?.serialNumber;
-    const [activeButton, setActiveButton] = useState('live')
+    const hostOverride = route.params?.host; // optional: allow overriding host from navigation params
+    const [activeButton, setActiveButton] = useState('live');
     const [isCleared, setIsCleared] = useState(false);
-    const [thresholds, setThresholds] = useState({
-        DI1: 100, 
-        DI3: 1, 
-        DI4: 5000, 
-    });
 
-    const handlePressIn = (buttonName) => {
-        setActiveButton(buttonName);
-    };
-    const getScaleValue = (buttonName) => {
-        return activeButton === buttonName ? 1.2 : 1;
-    };
+    // The big indicator will reflect the most recent PPM (LOS) reading
+    const [indicatorColor, setIndicatorColor] = useState('#16b800');
+    const [losReading, setLosReading] = useState(null); // Current Los Value shown in big indicator
+    const [threshold, setThreshold] = useState(null); // numeric threshold for los_ppm
+
+    const indicatorBigLabel = 'Gas Finder-PPM'; // Big indicator label (PPM)
+
+    const handlePressIn = (buttonName) => setActiveButton(buttonName);
+    const getScaleValue = (buttonName) => (activeButton === buttonName ? 1.05 : 1);
+
     const handleButtonPress = (buttonName) => {
         setCurrentView(buttonName);
-        setActiveButton(buttonName); // Set the button as active when clicked
+        setActiveButton(buttonName);
     };
 
     const clearTableData = () => {
-        if (currentView === 'live') {
-            setTableData([]);
-            setIsCleared(true); // Mark as cleared for live data
-        } else if (currentView === 'alarms') {
-            setAlarmData([]);
-        }
+        setTableData([]);
+        setIsCleared(true);
+        setTimeout(() => setIsCleared(false), 200);
     };
 
-    // Add refs for thresholds and indicatorColors
-    const thresholdsRef = useRef(thresholds);
-    const indicatorColorsRef = useRef(indicatorColors);
+    // Helper - decide host to use based on platform/emulator (optional)
+    const pickHost = () => {
+        if (hostOverride) return hostOverride;
+        const defaultHost = '192.168.0.173';
+        if (Platform.OS === 'android') {
+            // For Android emulator you'd use 10.0.2.2 (AVD) or 10.0.3.2 (Genymotion).
+            // For a physical device, ensure the device and dev machine are on same LAN and use the machine LAN IP.
+            return defaultHost;
+        }
+        return defaultHost;
+    };
 
-    // Update refs whenever these values change
-    useEffect(() => {
-        thresholdsRef.current = thresholds;
-    }, [thresholds]);
-
-    useEffect(() => {
-        indicatorColorsRef.current = indicatorColors;
-    }, [indicatorColors]);
-
-    //check device online using ping mechanism
-
+    // Ping device to check status (improved logging + http fallback)
     useEffect(() => {
         let pingInterval = null;
-    
+        const host = pickHost();
+        const pingPath = (protocol) => `${protocol}://${host}:3004/api/ping/${serialNumber}`;
+
         const checkDeviceStatus = async () => {
-            try {
-                const response = await fetch(`https://transgaz.soniciot.com/api/ping/${serialNumber}`);
-                if (response.ok) {
-                    // If the ping is successful, mark the device as online
-                    setConnectionState({ color: '#16b800', serialNo: serialNumber });
-                } else {
-                    // If the ping fails, mark the device as offline
-                    setConnectionState({ color: '#ff2323', serialNo: serialNumber });
-                }
-            } catch (error) {
-                // Handle network or other errors
+            if (!serialNumber) {
+                console.warn('No serialNumber provided to IndicatorApp ping effect');
                 setConnectionState({ color: '#ff2323', serialNo: serialNumber });
+                return;
+            }
+
+            try {
+                const url = pingPath('https');
+                const response = await fetch(url, { method: 'GET' });
+                if (response.ok) {
+                    setConnectionState({ color: '#16b800', serialNo: serialNumber });
+                    return;
+                } else {
+                    setConnectionState({ color: '#ff2323', serialNo: serialNumber });
+                    return;
+                }
+            } catch (err) {
+                try {
+                    const urlHttp = pingPath('http');
+                    const resp2 = await fetch(urlHttp, { method: 'GET' });
+                    if (resp2.ok) {
+                        setConnectionState({ color: '#16b800', serialNo: serialNumber });
+                        return;
+                    } else {
+                        setConnectionState({ color: '#ff2323', serialNo: serialNumber });
+                        return;
+                    }
+                } catch (err2) {
+                    setConnectionState({ color: '#ff2323', serialNo: serialNumber });
+                    return;
+                }
             }
         };
-    
-        // Start the periodic ping
-        pingInterval = setInterval(checkDeviceStatus, 15000); // Ping every 10 seconds
-    
-        // Perform an initial ping immediately
-        checkDeviceStatus();
-    
-        return () => {
-            // Clear the interval on component unmount
-            clearInterval(pingInterval);
-        };
-    }, [serialNumber]);
 
+        checkDeviceStatus();
+        pingInterval = setInterval(checkDeviceStatus, 15000);
+        return () => {
+            if (pingInterval) clearInterval(pingInterval);
+        };
+    }, [serialNumber, route.params?.host]);
+
+    // Normalize incoming param keys and produce display name + formatted value
+    const formatIndicator = (key, rawValue) => {
+        const degree = '\u00B0';
+        const originalKey = String(key);
+        const keyNorm = originalKey.toLowerCase().replace(/[\s\-_()]/g, '');
+
+        // coerce numeric values when possible
+        const num = (typeof rawValue === 'number') ? rawValue : (rawValue !== null && rawValue !== undefined ? Number(rawValue) : NaN);
+        const isNumber = !Number.isNaN(num);
+
+        // PPM variants -> Gas Finder-PPM
+        if (keyNorm.includes('los') && keyNorm.includes('ppm') || keyNorm.includes('losppm') || keyNorm === 'ppm' || keyNorm.includes('ppmvalue')) {
+            const displayName = 'Gas Finder-PPM';
+            const value = isNumber ? Math.round(num) : rawValue;
+            return { displayName, value };
+        }
+
+        // Temperature
+        if (keyNorm.includes('temp') || keyNorm.includes('temperature') || keyNorm.includes('℃') || keyNorm.includes('celsius')) {
+            const displayName = `Temp(${degree}C)`;
+            const value = isNumber ? `${num.toFixed(1)}${degree}C` : rawValue;
+            return { displayName, value };
+        }
+
+        // RX-light variants
+        if (keyNorm.includes('rx') && (keyNorm.includes('light') || keyNorm.includes('led') || keyNorm === 'rx')) {
+            const displayName = 'RX-light';
+            const value = isNumber ? num : rawValue;
+            return { displayName, value };
+        }
+
+        // R2
+        if (keyNorm === 'r2' || keyNorm.includes('r2')) {
+            const displayName = 'R2';
+            const value = isNumber ? num : rawValue;
+            return { displayName, value };
+        }
+
+        // HeartBeat variants
+        if (keyNorm.includes('heartbeat') || keyNorm.includes('heart') || keyNorm.includes('hb')) {
+            const displayName = 'HeartBeat';
+            const value = isNumber ? Math.round(num) : rawValue;
+            return { displayName, value };
+        }
+
+        // Fallback: present a cleaned title (remove los if present)
+        let cleaned = originalKey.replace(/los/ig, '').replace(/[_\-]/g, ' ').trim();
+        if (!cleaned) cleaned = originalKey;
+        // Title case fallback
+        const displayName = cleaned.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        const value = isNumber ? (Number.isInteger(num) ? num : Number(num.toFixed(2))) : rawValue;
+        return { displayName, value };
+    };
+
+    // WebSocket: receive latest readings (handles multiple params)
     useEffect(() => {
-        const socket = io("https://transgaz.soniciot.com", {
+        const host = pickHost();
+        // Use http or https depending on your socket server. Set 'http' if running without TLS in dev.
+        const protocol = 'http';
+        const socketUrl = `${protocol}://${host}:3004`;
+        const socket = io(socketUrl, {
             reconnection: true,
             reconnectionAttempts: 5,
             reconnectionDelay: 2000,
             timeout: 20000,
         });
-    
-        let lastMessageTimestamp = null;
-        let connectionCheckInterval = null;
 
-    
-        socket.on('connect', () => {
-            console.log('WebSocket connected');
-        });
-    
-        socket.on("connect_error", (err) => {
-            console.error("Connection error:", err);
-        });
-    
-        socket.on('disconnect', () => {
-            console.log('WebSocket disconnected');
-        });
-    
-        socket.on("reconnect_attempt", () => {
-            console.log('Attempting to reconnect...');
-        });
-    
-        socket.on("reconnect", () => {
-            console.log('Reconnected successfully');
-        });
-    
-        socket.on("reconnect_failed", () => {
-            console.error('Reconnection failed');
-        });
-    
-        socket.on("bivicomdata", (data) => {
-            try {
-                data = JSON.parse(data);
-    
-                if (data.serialNumber === serialNumber) {
-                    lastMessageTimestamp = Date.now();
-    
-                    const valueA = data.A;
-                    const valueB = data.B;
-                    const valueC = data.C;
-                    const valueD = data.D;
-    
-                    console.log(valueA, valueB, valueC, valueD);
-    
-                    const timestamp = new Date().toLocaleString();
-    
-                    const newData = [
-                        { TIMESTAMP: timestamp, INPUT: 'DI1', MESSAGE: valueA },
-                        { TIMESTAMP: timestamp, INPUT: 'DI2', MESSAGE: valueB },
-                        { TIMESTAMP: timestamp, INPUT: 'DI3', MESSAGE: valueC },
-                        { TIMESTAMP: timestamp, INPUT: 'DI4', MESSAGE: valueD },
-                    ];
-    
-                    setTableData((prevTableData) => [...prevTableData, ...newData]);
-    
-                    const updatedColors = { ...indicatorColors };
-                    const newAlarmData = [];
-    
-                    if (valueA > thresholdsRef.current.DI1) {
-                        updatedColors['DI1'] = '#b10303';
-                        newAlarmData.push({ TIMESTAMP: timestamp, INPUT: 'DI1', MESSAGE: valueA });
-                    } else {
-                        updatedColors['DI1'] = '#16b800';
-                    }
-    
-                    if (valueB > thresholdsRef.current.DI2) {
-                        updatedColors['DI2'] = '#b10303';
-                        newAlarmData.push({ TIMESTAMP: timestamp, INPUT: 'DI2', MESSAGE: valueB });
-                    } else {
-                        updatedColors['DI2'] = '#16b800';
-                    }
-    
-                    if (valueC > thresholdsRef.current.DI3) {
-                        updatedColors['DI3'] = '#b10303';
-                        newAlarmData.push({ TIMESTAMP: timestamp, INPUT: 'DI3', MESSAGE: valueC });
-                    } else {
-                        updatedColors['DI3'] = '#16b800';
-                    }
-    
-                    if (valueD > thresholdsRef.current.DI4) {
-                        updatedColors['DI4'] = '#b10303';
-                        newAlarmData.push({ TIMESTAMP: timestamp, INPUT: 'DI4', MESSAGE: valueD });
-                    } else {
-                        updatedColors['DI4'] = '#16b800';
-                    }
-    
-                    setAlarmData((prevAlarmData) => [...prevAlarmData, ...newAlarmData]);
-                    setIndicatorColors(updatedColors);
+        socket.on('connect', () => console.log('WebSocket connected to', socketUrl));
+        socket.on('disconnect', () => console.log('WebSocket disconnected'));
+        socket.on("reconnect_attempt", () => console.log('Attempting to reconnect...'));
 
-                    // Save updated colors to the backend
-                    ['DI1', 'DI2', 'DI3', 'DI4'].forEach((indicator) => {
-                        const newColor = updatedColors[indicator];
-                        fetch('https://transgaz.soniciot.com/api/indicatoricons/update', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                serial_number: serialNumber,
-                                indicator,
-                                color: newColor,
-                            }),
-                        }).catch((error) => console.error(`Error saving color for ${indicator}:`, error));
-                    });
+        socket.on("mqtt_message", (msg) => {
+            console.log('Received mqtt_message:', msg);
+            // extract params object (supporting payload.params or payload itself)
+            let params = null;
+            if (msg.payload && typeof msg.payload === 'object') {
+                params = (msg.payload.params && typeof msg.payload.params === 'object') ? msg.payload.params : msg.payload;
+            } else if (msg.params && typeof msg.params === 'object') {
+                params = msg.params;
+            }
+            if (!params || typeof params !== 'object') return;
+
+            const timestamp = new Date().toLocaleString();
+            const newRows = [];
+
+            // iterate all keys from params and map them to display names + formatted values
+            Object.entries(params).forEach(([k, v]) => {
+                const { displayName, value } = formatIndicator(k, v);
+                // push every mapped indicator (including PPM and others)
+                const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${displayName}`;
+                newRows.push({
+                    id,
+                    TIMESTAMP: timestamp,
+                    INDICATOR: displayName,
+                    VALUE: value,
+                    rawKey: k,
+                    rawValue: v
+                });
+
+                // If this is the PPM (LOS) reading, update the big indicator and color
+                const keyNorm = String(k).toLowerCase();
+                if ((keyNorm.includes('los') && keyNorm.includes('ppm')) || keyNorm.includes('ppm') || displayName === 'Gas Finder-PPM') {
+                    // prefer numeric if available
+                    const numeric = (typeof v === 'number') ? v : Number(v);
+                    if (!Number.isNaN(numeric)) {
+                        setLosReading(numeric);
+                        if (threshold !== null && numeric > threshold) {
+                            setIndicatorColor('#b10303');
+                        } else {
+                            setIndicatorColor('#16b800');
+                        }
+                    } else {
+                        // if not numeric, still set the big indicator raw value as string
+                        setLosReading(v);
+                    }
                 }
-            } catch (err) {
-                console.error("Socket data parsing error:", err);
+            });
+
+            if (newRows.length > 0) {
+                // prepend new rows (newest first), and cap the list to last 1000 entries
+                setTableData(prev => {
+                    const next = [...newRows, ...prev].slice(0, 1000);
+                    return next;
+                });
+                // auto-scroll to top so newest rows are visible (only for live view)
+                if (currentView === 'live') {
+                    setTimeout(() => {
+                        try {
+                            flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                        } catch (e) {
+                            // ignore if scroll fails
+                        }
+                    }, 50);
+                }
             }
         });
-    
-        const interval = setInterval(() => {
-            socket.emit("ping");
-        }, 15000);
-    
-    
+
         return () => {
-            clearInterval(interval);
-            socket.disconnect();
-        };
-    }, [serialNumber, thresholds, indicatorColors]);
-    
-
-    // Fetch thresholds on mount
-    useEffect(() => {
-        const fetchThresholds = async () => {
             try {
-                const response = await fetch(`https://transgaz.soniciot.com/api/thresholds/${serialNumber}`);
-                const data = await response.json();
-                setThresholds(data);
-            } catch (error) {
-                console.error('Error fetching thresholds:', error);
+                socket.disconnect();
+            } catch (e) {
+                console.warn('Error disconnecting socket', e);
             }
         };
-        fetchThresholds();
-    }, [serialNumber]);
+    }, [serialNumber, threshold, route.params?.host, currentView]);
 
-
-    //initialize new indicators name if there is no name
+    // Fetch threshold from backend. Try /api/thresholds/:serialNumber then fallback to /api/threshold/:serialNumber
     useEffect(() => {
-        const initializeIndicators = async () => {
+        const fetchThreshold = async () => {
             try {
-                await fetch('https://transgaz.soniciot.com/api/initialize', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ serial_number: serialNumber }),
-                });
+                const host = pickHost();
+                const response = await fetch(`http://${host}:3004/api/thresholds/${serialNumber}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setThreshold(data.los_ppm ?? null);
+                } else {
+                    setThreshold(null);
+                }
             } catch (error) {
-                console.error('Error initializing indicators:', error);
+                console.warn('Failed to fetch threshold:', error);
+                setThreshold(null);
             }
         };
+        fetchThreshold();
+    }, [serialNumber, route.params?.host]);
 
-        if (serialNumber) {
-            initializeIndicators();
+    // Derive alarms list: entries where indicator is Gas Finder-PPM and numeric value > threshold
+    const alarms = useMemo(() => {
+        if (threshold === null || threshold === undefined) return [];
+        return tableData.filter((row) => {
+            try {
+                const keyNorm = String(row.rawKey || '').toLowerCase();
+                const isPPM = row.INDICATOR === 'Gas Finder-PPM' || keyNorm.includes('ppm') || String(row.INDICATOR).toLowerCase().includes('ppm');
+                if (!isPPM) return false;
+                const numeric = (typeof row.rawValue === 'number') ? row.rawValue : Number(row.rawValue);
+                if (Number.isNaN(numeric)) return false;
+                return numeric > threshold;
+            } catch (e) {
+                return false;
+            }
+        }).slice(0, 1000); // cap
+    }, [tableData, threshold]);
+
+    const renderRow = ({ item }) => {
+        // color VALUE cell red when above threshold (only meaningful for numeric values)
+        let valueStyle = {};
+        const rawVal = item.rawValue;
+        const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
+        if (threshold !== null && !Number.isNaN(numeric) && numeric > threshold && item.INDICATOR === 'Gas Finder-PPM') {
+            valueStyle = { color: '#b10303', fontWeight: '700' };
         }
-    }, [serialNumber]); // Run this when the serial number changes
 
-
-    // Fetch Indicator Names from Backend
-    useEffect(() => {
-        const fetchIndicators = async () => {
-            try {
-                const response = await fetch(`https://transgaz.soniciot.com/api/indicators/${serialNumber}`);
-                const data = await response.json();
-                console.log(data)
-                setIndicatorname(data); // Set the fetched indicator names to state
-            } catch (error) {
-                console.error('Error fetching indicators:', error);
-            }
-        };
-
-        if (serialNumber) {
-            fetchIndicators();
-        }
-    }, [serialNumber]); // Fetch indicators whenever the serial number changes
-
-    useEffect(() => {
-        const fetchIndicatorColors = async () => {
-            try {
-                const response = await fetch(`https://transgaz.soniciot.com/api/indicatoricons/${serialNumber}`);
-                const data = await response.json();
-
-                // Map the colors from the response
-                const colors = {};
-                data.forEach(indicator => {
-                    colors[indicator.indicator] = indicator.color;
-                });
-
-                setIndicatorColors(colors);
-            } catch (error) {
-                console.error('Error fetching indicator colors:', error);
-            }
-        };
-
-        if (serialNumber) {
-            fetchIndicatorColors();
-        }
-    }, [serialNumber]);
-
-
-    useEffect(() => {
-        const fetchReverseIndicator = async () => {
-            try {
-                const response = await fetch(`https://transgaz.soniciot.com/api/reverse-indicator/${serialNumber}`);
-                const data = await response.json();
-                setIsReversed(data.isReversed);
-            } catch (error) {
-                console.error('Error fetching reverse indicator:', error);
-            }
-        };
-
-        fetchReverseIndicator();
-    }, [serialNumber]);
-
-    const getIndicatorColor = useCallback(
-        (index) => {
-            // If the device is offline, return gray for all indicators
-            if (connectionState.color !== '#16b800') {
-                return 'grey';
-            }
-    
-            // Otherwise, get the color from the indicatorColors state
-            const color = indicatorColors[index] || 'grey';
-            if (isReversed) {
-                return color === '#16b800' ? '#b10303' : color === '#b10303' ? '#16b800' : color;
-            }
-            return color;
-        },
-        [indicatorColors, isReversed, connectionState.color]
-    );
-
-    const renderRow = useCallback(({ item }) => {
-        // Map the INPUT value (DI1, DI2, etc.) to the corresponding indicator name
-        const indicatorIndex = parseInt(item.INPUT.replace('DI', ''), 10) - 1; // Extract the number from "DI1", "DI2", etc.
-        const indicatorDisplayName = indicatorname[indicatorIndex]?.name || item.INPUT; // Use the indicator name or fallback to INPUT
-
-        // Determine the alarm status
-        //const alarmStatus = item.VALUE === '1' ? 'Alarm ON' : 'Alarm OFF';
         return (
             <View style={styles.row}>
                 <Text style={[styles.cell, styles.dateCell]}>{item.TIMESTAMP}</Text>
-                <Text style={[styles.cell, styles.dataCell]}>{indicatorDisplayName}</Text>
-                <Text style={[styles.cell, styles.statusCell]}>{item.MESSAGE}</Text>
+                <Text style={[styles.cell, styles.dataCell]}>{item.INDICATOR}</Text>
+                <Text style={[styles.cell, styles.statusCell, valueStyle]}>{String(item.VALUE)}</Text>
             </View>
         );
-    }, [indicatorname]);
+    };
 
+    const renderAlarmRow = ({ item }) => {
+        const rawVal = item.rawValue;
+        const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
+        const isAlarm = !Number.isNaN(numeric) && threshold !== null && numeric > threshold;
+        const ledColor = isAlarm ? '#b10303' : '#16b800';
+        return (
+            <View style={styles.row}>
+                <Text style={[styles.cell, styles.dateCell]}>{item.TIMESTAMP}</Text>
+                <View style={[styles.alarmIndicatorCell]}>
+                    <View style={[styles.led, { backgroundColor: ledColor }]} />
+                    <Text style={[styles.cell, styles.dataCell, { marginLeft: 8 }]}>{String(item.VALUE)}</Text>
+                </View>
+            </View>
+        );
+    };
 
     if (loading) {
         return (
@@ -362,157 +331,94 @@ const IndicatorApp = ({ route, navigation }) => {
         );
     }
 
-    const boxStyle = {
-        ...styles.box,
-        height: currentView === 'logs' ? '40%' : '43%',
-        marginTop: currentView === 'logs' ? 30 : 10
-    };
-    const handleNextPage = () => {
-        // Navigate to the settings page
-        navigation.navigate('Settings', {
-            serialNumber,
-            indicatorNames: indicatorname,
-            reverseState: isReversed,
-            onUpdate: ({ updatedIndicatornames, updatedReversestate, updatedThresholds }) => {
-                if (updatedIndicatornames) {
-                    setIndicatorname(updatedIndicatornames); // Update indicator names dynamically
-                }
-                if (updatedReversestate !== undefined) {
-                    setIsReversed(updatedReversestate); // Update reverse state dynamically
-                }
-                if (updatedThresholds) {
-                    setThresholds(updatedThresholds); // Update thresholds dynamically
-                }
-            },
-        });
-    };
-
-
-
+    // Helper to style tab buttons
+    const tabStyle = (name) => (activeButton === name ? styles.tabActive : styles.tabInactive);
+    const tabTextStyle = (name) => (activeButton === name ? styles.tabTextActive : styles.tabTextInactive);
 
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.first}>
-                
-                    <Image 
-                    style={styles.logo} 
-                    source={require('../assets/logos.png')} // Change this to your image path
+                <Image
+                    style={styles.logo}
+                    source={require('../Assets/boreal.png')}
                     resizeMode="contain"
-                    />
-                    <Icon style={styles.settings} name="settings-outline" size={30} color="gray" onPress={handleNextPage} />
+                />
+                <Icon style={styles.settings} name="settings-outline" size={30} color="gray" onPress={() => navigation.navigate('Settings', { serialNumber })} />
             </View>
             <Text style={[styles.statusText, { color: connectionState.color }]}>
                 {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
             </Text>
-            <View style={styles.intro}>
-                <View style={styles.serialbox}>
-                    <Text style={styles.serialno}>{connectionState.serialNo || serialNumber}</Text>
-                </View>
-                <View style={styles.statusContainer}>
-                    {/* Render SignalDisplay only if the device is online */}
-                    {connectionState.color === '#16b800' && <SignalDisplay serialNo={serialNumber} />}
-                </View>
+            <View style={styles.serialbox}>
+                <Text style={styles.serialno}>{connectionState.serialNo || serialNumber}</Text>
             </View>
 
-            <View style={styles.indicatorContainer}>
-                {/* Row for the icons */}
-                <View style={styles.indicatorRow}>
-                    {iconNames.map((name, index) => (
-                        <View key={index} style={styles.indicatorWrapper}>
-                            {/* Outer Bezel */}
-                            <View style={styles.outerBezel}>
-                                {/* Reflection Effect */}
-                                <View style={styles.reflection} />
-
-                                {/* Outer Ring */}
-                                <View style={styles.outerRing}>
-                                    {/* Inner Glow */}
-                                    <View
-                                        style={[
-                                            styles.innerGlow,
-                                            { backgroundColor: getIndicatorColor(name) || 'grey' },
-                                        ]}
-                                    />
-
-                                    {/* Main Indicator */}
-                                    <View
-                                        style={[
-                                            styles.indicator,
-                                            { backgroundColor: getIndicatorColor(name) || 'grey' },
-                                        ]}
-                                    />
-                                </View>
-                            </View>
-                        </View>
-                    ))}
-                </View>
-
-                {/* Row for the indicator names */}
-                <View style={styles.indicatornameRow}>
-                    {indicatorname.map((indicator) => (
-                        <View key={indicator.id} style={styles.indicatorWrapper}>
-                            <Text style={styles.label}>{indicator.name}</Text>
-                        </View>
-                    ))}
-                </View>
-
-                {/* Row for the labels (PPM, LEL%, mA) aligned with the icons */}
-                <View style={styles.indicatorLabelRow}>
-                    <View style={styles.indicatorWrapper}>
-                        <Text style={styles.label}>PPM</Text>
-                    </View>
-                    <View style={styles.indicatorWrapper}>
-                        <Text style={styles.label}>PPM</Text>
-                    </View>
-                    <View style={styles.indicatorWrapper}>
-                        <Text style={styles.label}>LEL%</Text>
-                    </View>
-                    <View style={styles.indicatorWrapper}>
-                        <Text style={styles.label}>mA</Text>
+            {/* Big Indicator (PPM) */}
+            <View style={styles.singleIndicatorContainer}>
+                <View style={[styles.outerBezel]}>
+                    <View style={styles.reflection} />
+                    <View style={styles.outerRing}>
+                        <View
+                            style={[
+                                styles.innerGlow,
+                                { backgroundColor: indicatorColor },
+                            ]}
+                        />
+                        <View
+                            style={[
+                                styles.indicator,
+                                { backgroundColor: indicatorColor },
+                            ]}
+                        />
                     </View>
                 </View>
+                <Text style={{ color: 'white', fontSize: 20, marginTop: 10 }}>{indicatorBigLabel}</Text>
+                <Text style={{ color: indicatorColor, fontSize: 36, fontWeight: 'bold' }}>
+                    {losReading !== null ? (typeof losReading === 'number' ? Math.round(losReading) : String(losReading)) : '-'}
+                </Text>
+                <Text style={{ color: '#bbb', fontSize: 12, marginTop: 6 }}>
+                    {threshold !== null ? `Alarm threshold: ${threshold}` : 'Threshold not set'}
+                </Text>
             </View>
+
             <View style={styles.switchbuttons}>
-                <Animated.View style={{ transform: [{ scale: getScaleValue('live') }] }}>
-                    <TouchableOpacity
-                        onPressIn={() => handlePressIn('live')}
-                        onPress={() => handleButtonPress('live')}
-                    >
-                        <Text style={styles.logs}>Live</Text>
-                    </TouchableOpacity>
-                </Animated.View>
+                <TouchableOpacity
+                    style={[styles.logs, tabStyle('live')]}
+                    onPressIn={() => handlePressIn('live')}
+                    onPress={() => handleButtonPress('live')}
+                >
+                    <Text style={[styles.buttonText, tabTextStyle('live')]}>Live</Text>
+                </TouchableOpacity>
 
-                <Animated.View style={{ transform: [{ scale: getScaleValue('alarms') }] }}>
-                    <TouchableOpacity
-                        onPressIn={() => handlePressIn('alarms')}
-                        onPress={() => handleButtonPress('alarms')}
-                    >
-                        <Text style={styles.logs}>Alarms</Text>
-                    </TouchableOpacity>
-                </Animated.View>
-                    <TouchableOpacity style={styles.clearbutton}
-                        onPress={clearTableData}
-                    >
-                        <Text style={styles.cleartext}>Clear</Text>
-                    </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.logs, tabStyle('alarms')]}
+                    onPressIn={() => handlePressIn('alarms')}
+                    onPress={() => handleButtonPress('alarms')}
+                >
+                    <Text style={[styles.buttonText, tabTextStyle('alarms')]}>Alarms</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.clearbutton}
+                    onPress={clearTableData}
+                >
+                    <Text style={styles.cleartext}>Clear</Text>
+                </TouchableOpacity>
             </View>
 
-            <View style={boxStyle}>
-
+            <View style={styles.box}>
                 {currentView === 'live' && (
                     <>
                         <View style={styles.header}>
                             <Text style={[styles.heading, styles.dateHead]}>DATE & TIME</Text>
-                            <Text style={[styles.heading, styles.dataCell]}>ALARM</Text>
-                            <Text style={[styles.heading, styles.statusHead]}>STATUS</Text>
+                            <Text style={[styles.heading, styles.dataCell]}>INDICATOR</Text>
+                            <Text style={[styles.heading, styles.statusHead]}>VALUE</Text>
                         </View>
-
                         <FlatList
                             ref={flatListRef}
                             style={styles.tablebox}
-                            data={currentView === 'live' ? tableData : alarmData}
+                            data={tableData}
                             renderItem={renderRow}
-                            keyExtractor={(item, index) => `${index}-${item.TIMESTAMP}`}
+                            keyExtractor={(item) => item.id}
                             contentContainerStyle={styles.body}
                             ListEmptyComponent={() => (
                                 <Text style={{ textAlign: 'center', color: 'gray', marginTop: 20 }}>
@@ -521,7 +427,7 @@ const IndicatorApp = ({ route, navigation }) => {
                             )}
                             initialNumToRender={10}
                             windowSize={5}
-                            removeClippedSubviews={false} // Disable to check if this resolves the issue
+                            removeClippedSubviews={false}
                         />
                     </>
                 )}
@@ -530,30 +436,35 @@ const IndicatorApp = ({ route, navigation }) => {
                     <>
                         <View style={styles.header}>
                             <Text style={[styles.heading, styles.dateHead]}>DATE & TIME</Text>
-                            <Text style={[styles.heading, styles.dataCell]}>ALARM</Text>
-                            <Text style={[styles.heading, styles.statusHead]}>STATUS</Text>
+                            <Text style={[styles.heading, styles.dataCell]}>PPM VALUE</Text>
                         </View>
 
-                        <FlatList
-                            ref={flatListRef}
-                            style={styles.tablebox}
-                            data={currentView === 'live' ? tableData : alarmData}
-                            renderItem={renderRow}
-                            keyExtractor={(item, index) => `${index}-${item.TIMESTAMP}`}
-                            contentContainerStyle={styles.body}
-                            ListEmptyComponent={() => (
-                                <Text style={{ textAlign: 'center', color: 'gray', marginTop: 20 }}>
-                                    No data to display
-                                </Text>
-                            )}
-                            initialNumToRender={10}
-                            windowSize={5}
-                            removeClippedSubviews={false} // Disable to check if this resolves the issue
-                        />
+                        {threshold === null ? (
+                            <View style={{ padding: 20 }}>
+                                <Text style={{ color: '#bbb' }}>Threshold not set. Alarms will not be shown until a threshold is configured.</Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                ref={flatListRef}
+                                style={styles.tablebox}
+                                data={alarms}
+                                renderItem={renderAlarmRow}
+                                keyExtractor={(item) => item.id}
+                                contentContainerStyle={styles.body}
+                                ListEmptyComponent={() => (
+                                    <Text style={{ textAlign: 'center', color: 'gray', marginTop: 20 }}>
+                                        No alarms (no PPM readings above threshold)
+                                    </Text>
+                                )}
+                                initialNumToRender={10}
+                                windowSize={5}
+                                removeClippedSubviews={false}
+                            />
+                        )}
                     </>
                 )}
             </View>
-                <Text style={styles.subTextdown}>Powered by SONIC</Text>
+            <Text style={styles.subTextdown}>Powered by SONIC</Text>
         </SafeAreaView>
     );
 };
@@ -571,14 +482,11 @@ const styles = StyleSheet.create({
         resizeMode: 'contain',
         opacity : 0.8,
     },
-    loadingtext: {
-        color: 'white'
-    },
     subTextdown: {
         fontSize: 12,
         color: 'rgba(255, 255, 255, 0.4)',
         textAlign: 'center',
-        marginTop: '1%'  
+        marginTop: '1%'
     },
     first: {
         width: '100%',
@@ -586,35 +494,29 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
     },
-    intro: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        width: '100%',
-        marginBottom: 50
-    },
     serialbox: {
-        width: 200, // Adjust width as per your design
-        height: 50, // Adjust height for a small display
+        width: 200,
+        height: 50,
         marginTop: '8%',
-        backgroundColor: '#000', // Display background color
-        borderRadius: 10, // Rounded corners
+        backgroundColor: '#000',
+        borderRadius: 10,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2, // Border width for a metallic finish
-        borderColor: '#888', // Border color
-        shadowColor: '#000', // Shadow for depth
+        borderWidth: 2,
+        borderColor: '#888',
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.7,
         shadowRadius: 10,
-        elevation: 5, // Elevation for Android
+        elevation: 5,
     },
     serialno: {
-        fontSize: 18, // Font size for the serial number
+        fontSize: 18,
         fontWeight: 'bold',
-        color: '#fff', // White text color
-        textShadowColor: '#16b800', // Green shadow for a glowing effect
+        color: '#fff',
+        textShadowColor: '#16b800',
         textShadowOffset: { width: 1, height: 1 },
-        textShadowRadius: 10, // Create a glowing effect
+        textShadowRadius: 10,
     },
     statusText: {
         fontSize: 20,
@@ -624,128 +526,69 @@ const styles = StyleSheet.create({
         marginTop: '23%',
         right: '10%',
     },
-    statusContainer: {
+    singleIndicatorContainer: {
         alignItems: 'center',
-        marginTop: '8%'
+        marginVertical: 30,
     },
-    top: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 20,
-        width: '100%',
-        padding: 10,
-    },
-    editbutton: {
-        backgroundColor: '#7da9ff',
-        borderRadius: 10,
-        paddingVertical: 10,
-        paddingHorizontal: 15,
-        alignItems: 'center',
+    outerBezel: {
+        width: 90,
+        height: 90,
+        borderRadius: 45,
+        backgroundColor: '#444',
         justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 5,
-    },
-    reverseButton: {
-        backgroundColor: '#7da9ff',
-        borderRadius: 10,
-        paddingVertical: 10,
-        paddingHorizontal: 15,
         alignItems: 'center',
-        justifyContent: 'center',
-        marginLeft: 10,
+        borderWidth: 4,
+        borderColor: '#666',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 5, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 5,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.7,
+        shadowRadius: 6,
     },
-    clearbutton: {
+    reflection: {
         position: 'absolute',
-        right: 0
+        top: 6,
+        left: 10,
+        width: 62,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: 'rgba(255, 255, 255, 0.3)',
     },
-    cleartext: {
-        backgroundColor: '#222',
-        width: 70,
-        height: 35,
-        borderRadius: 5,
-        paddingVertical: 10,
-        paddingHorizontal: 15,
-        alignItems: 'center',
+    outerRing: {
+        width: 74,
+        height: 74,
+        borderRadius: 37,
+        borderWidth: 3,
+        borderColor: '#999',
         justifyContent: 'center',
-        marginLeft: 10,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.5,
-        shadowRadius: 4,
-        elevation: 5, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 5,
-        fontWeight: 'bold',
-        color: 'white'
-    },
-    buttonText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        textAlign: 'center',
-    },
-    indicatorContainer: {
-        flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
+        backgroundColor: '#444',
     },
-    indicatorRow: {
-        flexDirection: 'row',
+    innerGlow: {
+        position: 'absolute',
+        width: 62,
+        height: 62,
+        borderRadius: 31,
+        opacity: 0.5,
     },
-    indicatornameRow: {
-        flexDirection: 'row',
-        marginBottom: 5,
-    },
-    indicatorLabelRow: {
-        flexDirection: 'row',
-        marginBottom: 20,
-    },
-    indicatorWrapper: {
-        marginHorizontal: '3%',
-        alignItems: 'center', 
-        width: 70, 
-    },
-    label: {
-        marginTop: 5,
-        fontSize: 13,
-        color: 'white',
-        fontWeight: 'bold',
-        width: '100%', 
-        textAlign: 'center',
-    },
-    textInput: {
-        borderBottomWidth: 1,
-        borderColor: '#000',
-        textAlign: 'center',
-        fontSize: 14,
-        width: 50,
-        color: '#000',
+    indicator: {
+        width: 46,
+        height: 46,
+        borderRadius: 23,
+        elevation: 3,
     },
     switchbuttons: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        width: '100%'
+        width: '100%',
+        marginBottom: 10,
     },
     logs: {
         backgroundColor: 'gray',
-        width: 80,
+        width: 100,
         height: 40,
-        borderRadius: 5,
-        paddingVertical: 10,
-        paddingHorizontal: 15,
+        borderRadius: 6,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
         alignItems: 'center',
         justifyContent: 'center',
         marginLeft: 10,
@@ -753,19 +596,39 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.2,
         shadowRadius: 4,
-        elevation: 5, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
         elevation: 5,
-        fontWeight: 'bold'
+    },
+    tabActive: {
+        backgroundColor: '#16b800',
+    },
+    tabInactive: {
+        backgroundColor: '#4a4a4a',
+    },
+    tabTextActive: {
+        color: '#000',
+        fontWeight: '700',
+    },
+    tabTextInactive: {
+        color: '#fff',
+    },
+    clearbutton: {
+        marginLeft: 15,
+        backgroundColor: '#222',
+        width: 70,
+        height: 35,
+        borderRadius: 5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cleartext: {
+        fontWeight: 'bold',
+        color: 'white'
     },
     box: {
         width: '100%',
         alignItems: 'center',
         backgroundColor: '#353535',
         borderRadius: 10,
-
     },
     header: {
         flexDirection: 'row',
@@ -777,6 +640,7 @@ const styles = StyleSheet.create({
     },
     tablebox: {
         width: '98%',
+        height: '40%',
         backgroundColor: '#282828',
         borderRadius: 5,
         marginTop: 5,
@@ -790,8 +654,21 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         paddingVertical: 10,
         marginBottom: 5,
-        color: 'ffff'
-
+        color: 'ffff',
+        alignItems: 'center',
+    },
+    alarmIndicatorCell: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+    },
+    led: {
+        width: 14,
+        height: 14,
+        borderRadius: 7,
+        borderWidth: 1,
+        borderColor: '#111',
+        elevation: 2,
     },
     heading: {
         textAlign: 'center',
@@ -804,58 +681,6 @@ const styles = StyleSheet.create({
         flex: 2,
     },
     dateHead: {
-        flex: 5,
-        textAlign: 'left',
-        paddingHorizontal: 10,
-        color: 'white',
-    },
-    si: {
-        width: '15%',
-        textAlign: 'left',
-        color: 'white',
-    },
-    dt: {
-        width: '15%',
-        textAlign: 'left',
-        marginRight : '10%',
-        color: 'white',
-    },
-    al: {
-        width: '25%',
-        textAlign: 'left',
-        color: 'white',
-    },
-    st: {
-        width: '30%',
-        textAlign: 'left',
-        color: 'white',
-        marginRight : '10%'
-    },
-    cell: {
-        textAlign: 'center',
-        fontSize: 12,
-        color: 'white',
-        marginRight: 10
-    },
-    celll: {
-        textAlign: 'center',
-        fontSize: 12,
-        color: 'white',
-    },
-    col1: {
-        width: '15%'
-    },
-    col2: {
-        width: '30%'
-    },
-    col3: {
-        width: '20%'
-    },
-    col4: {
-        marginLeft : '5%',
-        width: '30%'
-    },
-    dateCell: {
         flex: 3,
         textAlign: 'left',
         paddingHorizontal: 10,
@@ -868,54 +693,18 @@ const styles = StyleSheet.create({
     statusCell: {
         flex: 1,
     },
-    outerBezel: {
-        width: 55,
-        height: 55,
-        borderRadius: 27.5,
-        backgroundColor: '#444', // Bezel background
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 4,
-        borderColor: '#666', // Metallic bezel
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.7,
-        shadowRadius: 6,
+    cell: {
+        textAlign: 'center',
+        fontSize: 12,
+        color: 'white',
+        marginRight: 10
     },
-    reflection: {
-        position: 'absolute',
-        top: 4,
-        left: 5,
-        width: 42,
-        height: 18,
-        borderRadius: 9,
-        backgroundColor: 'rgba(255, 255, 255, 0.3)', // Subtle reflection
+    loadingtext: {
+        color: 'white'
     },
-    outerRing: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        borderWidth: 3,
-        borderColor: '#999', // Metallic outer ring
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#444', // Inner ring background
-    },
-    innerGlow: {
-        position: 'absolute',
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        opacity: 0.5,
-    },
-    indicator: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
-        elevation: 3,
-    },
-
-
+    errorText: {
+        color: 'red'
+    }
 });
 
 export default IndicatorApp;
