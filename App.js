@@ -26,7 +26,7 @@ export default function App() {
         console.log('🔑 FCM Token:', token);
   
         // Send the token to the backend
-        await fetch('http://192.168.0.173/api/save-token', {
+        await fetch('http://192.168.1.106/api/save-token', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

@@ -36,7 +36,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
   const pickHost = () => {
     if (hostOverride) return hostOverride;
-    const defaultHost = '192.168.0.173';
+    const defaultHost = '192.168.1.106';
     if (Platform.OS === 'android') {
       return defaultHost;
     }

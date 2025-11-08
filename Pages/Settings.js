@@ -5,518 +5,291 @@ import {
   View,
   TouchableOpacity,
   TextInput,
-  Switch,
   ScrollView,
   Image,
   ImageBackground,
-  Platform,
   Alert,
+  ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 
 export default function SettingsPage({ route, navigation }) {
-  // params sent from IndicatorApp:
-  // { serialNumber, indicatorNames, reverseState, onUpdate, host }
-  const {
-    serialNumber,
-    indicatorNames = [], // expected: [{ id: '...', name: '...' }, ...]
-    reverseState = false,
-    onUpdate,
-    host: hostOverride,
-  } = route.params || {};
+  // params: { serialNumber, onUpdate }
+  const { serialNumber, onUpdate } = route.params || {};
 
-  const [indicatorname, setIndicatorname] = useState(indicatorNames || []);
-  const [isReversed, setIsReversed] = useState(reverseState);
-  const [thresholds, setThresholds] = useState({}); // DI1, DI2 ... or indicatorName -> value
-  const [isEditingNames, setIsEditingNames] = useState(false);
-  const [isEditingThresholds, setIsEditingThresholds] = useState(false);
+  const [losPpm, setLosPpm] = useState(''); // string so input stays responsive
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // pickHost: prefer passed hostOverride, otherwise use default dev IP
-  const pickHost = () => {
-    if (hostOverride) return hostOverride;
-    const defaultHost = '192.168.0.173';
-    if (Platform.OS === 'android') {
-      // adjust for emulator or physical device as needed
-      return defaultHost;
-    }
-    return defaultHost;
-  };
+  // Static backend host
+  const HOST_IP = '192.168.1.106';
+  const BASE = `http://${HOST_IP}:3004`;
 
-  // load indicators (if not provided) and thresholds + reverse flag
   useEffect(() => {
     if (!serialNumber) return;
-
     let cancelled = false;
-    const host = pickHost();
-    const base = `http://${host}:3004`;
 
-    const fetchIndicators = async () => {
-      try {
-        const res = await fetch(`${base}/api/indicators/${serialNumber}`);
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data;
-      } catch (err) {
-        console.warn('fetchIndicators error', err);
-        return null;
-      }
-    };
-
-    const fetchThresholds = async () => {
-      try {
-        const res = await fetch(`${base}/api/thresholds/${serialNumber}`);
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data;
-      } catch (err) {
-        console.warn('fetchThresholds error', err);
-        return null;
-      }
-    };
-
-    const fetchReverse = async () => {
-      // try a couple of possible endpoints / shapes
-      try {
-        const res = await fetch(`${base}/api/reverse-indicator/${serialNumber}`);
-        if (res.ok) {
-          const body = await res.json();
-          // possible shapes: { reverseIndicator: true } or { isReversed: true } or { reverse_indicator: true }
-          if (typeof body.isReversed === 'boolean') return body.isReversed;
-          if (typeof body.reverseIndicator === 'boolean') return body.reverseIndicator;
-          if (typeof body.reverse_indicator === 'boolean') return body.reverse_indicator;
-          // sometimes backend returns { ok:true, serialNumber:..., reverseIndicator: true }
-          if (typeof body.reverseIndicator === 'boolean') return body.reverseIndicator;
-        }
-      } catch (err) {
-        // ignore and try fallback
-      }
-
-      try {
-        const res2 = await fetch(`${base}/api/device_settings/${serialNumber}`);
-        if (res2.ok) {
-          const b2 = await res2.json();
-          if (typeof b2.reverse_indicator === 'boolean') return b2.reverse_indicator;
-          if (typeof b2.reverseIndicator === 'boolean') return b2.reverseIndicator;
-          if (typeof b2.isReversed === 'boolean') return b2.isReversed;
-        }
-      } catch (err) {
-        // ignore
-      }
-
-      return null;
-    };
-
-    const loadAll = async () => {
+    const fetchLosPpm = async () => {
       setLoading(true);
       try {
-        // indicators: only fetch when none were passed in route params
-        if (!indicatorNames || indicatorNames.length === 0) {
-          const fetchedIndicators = await fetchIndicators();
-          if (!cancelled && Array.isArray(fetchedIndicators) && fetchedIndicators.length > 0) {
-            // normalize to { id, name }
-            setIndicatorname(fetchedIndicators.map((r) => ({ id: r.id, name: r.name })));
+        const res = await fetch(`${BASE}/api/thresholds/${serialNumber}`);
+        if (!res.ok) {
+          console.warn('fetch thresholds non-OK status', res.status);
+          if (!cancelled) setLosPpm('');
+          return;
+        }
+
+        const raw = await res.json();
+
+        // Normalize shapes and find los_ppm / ppm-like value
+        let value = undefined;
+
+        if (Array.isArray(raw)) {
+          const ppmRow = raw.find(
+            (r) =>
+              r &&
+              r.indicator &&
+              typeof r.indicator === 'string' &&
+              (r.indicator.toLowerCase().includes('ppm') || r.indicator.toLowerCase().includes('los'))
+          );
+          if (ppmRow) value = ppmRow.threshold;
+        } else if (raw && typeof raw === 'object') {
+          const obj = raw.thresholds && typeof raw.thresholds === 'object' ? raw.thresholds : raw;
+          if (obj.los_ppm !== undefined) value = obj.los_ppm;
+          else {
+            const ppmKey = Object.keys(obj).find((k) => k.toLowerCase().includes('ppm'));
+            if (ppmKey) value = obj[ppmKey];
           }
         }
 
-        // thresholds: backend may return either:
-        // - object mapping { DI1: 10, los_ppm: 25 } or
-        // - array of rows [{ indicator: 'los_ppm', threshold: 25 }, ...]
-        // We want thresholds state to be an object keyed by DI1/DI2 (matching UI),
-        // but we'll preserve any keys returned and also map ppm -> DIx if indicators present.
-        const fetchedThresholds = await fetchThresholds();
-        if (!cancelled && fetchedThresholds) {
-          let tObj = {};
-          if (Array.isArray(fetchedThresholds)) {
-            // convert array rows to mapping by indicator name
-            fetchedThresholds.forEach((r) => {
-              if (r.indicator) tObj[r.indicator] = r.threshold;
-            });
-          } else if (typeof fetchedThresholds === 'object') {
-            // If backend already returns object mapping, use it
-            tObj = { ...fetchedThresholds };
-          }
-
-          // If we have indicator list, map any ppm-like key to DI{index}
-          const indicators = (indicatorname && indicatorname.length > 0) ? indicatorname : (Array.isArray(fetchedThresholds) ? fetchedThresholds.map(r => ({ id: r.id, name: r.indicator })) : []);
-          // build DI keyed thresholds if not already present
-          const diMapped = {};
-          indicators.forEach((ind, idx) => {
-            const diKey = `DI${idx + 1}`;
-            // preserve existing DI value if present
-            if (tObj[diKey] !== undefined) {
-              diMapped[diKey] = tObj[diKey];
-              return;
-            }
-            // check for indicator name matches (ppm)
-            const name = (ind && (ind.name || ind.indicator || '')).toString().toLowerCase();
-            // prefer explicit los_ppm key
-            if (tObj.los_ppm !== undefined && (name.includes('ppm') || name.includes('los'))) {
-              diMapped[diKey] = tObj.los_ppm;
-              return;
-            }
-            // search tObj keys for one that contains 'ppm'
-            const ppmKey = Object.keys(tObj).find(k => k.toLowerCase().includes('ppm'));
-            if (ppmKey && (name.includes('ppm') || name.includes('los'))) {
-              diMapped[diKey] = tObj[ppmKey];
-              return;
-            }
-            // otherwise, if tObj has a key exactly matching the indicator name, use that
-            const exactKey = Object.keys(tObj).find(k => k.toLowerCase() === name);
-            if (exactKey) {
-              diMapped[diKey] = tObj[exactKey];
-              return;
-            }
-            // fallback: keep existing DI value if any, else undefined
-            if (thresholds[diKey] !== undefined) diMapped[diKey] = thresholds[diKey];
-          });
-
-          // merge any other keys (like los_ppm) so user can still edit that key by name if desired
-          const merged = { ...tObj, ...diMapped };
-          setThresholds(merged);
+        if (!cancelled) {
+          if (value === undefined || value === null) setLosPpm('');
+          else setLosPpm(String(value));
         }
-
-        // reverse flag
-        const rev = await fetchReverse();
-        if (!cancelled && typeof rev === 'boolean') {
-          setIsReversed(rev);
-        }
+      } catch (err) {
+        console.warn('fetch thresholds error', err);
+        if (!cancelled) setLosPpm('');
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
 
-    loadAll();
-
+    fetchLosPpm();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serialNumber]);
 
-  const handleThresholdChange = (key, value) => {
-    setThresholds((prev) => ({
-      ...prev,
-      [key]: value === '' ? '' : parseFloat(value),
-    }));
-  };
-
-  const handleNameChange = (id, newName) => {
-    setIndicatorname((prevNames) =>
-      prevNames.map((item) => (item.id === id ? { ...item, name: newName } : item)),
-    );
-  };
-
-  const handleSubmit = async () => {
+  const handleSave = async () => {
+    Keyboard.dismiss();
     if (!serialNumber) {
-      Alert.alert('Error', 'No serialNumber available.');
+      Alert.alert('Error', 'No serial number provided.');
       return;
     }
-    setLoading(true);
-    const host = pickHost();
-    const base = `http://${host}:3004`;
 
+    // validate
+    const trimmed = losPpm === null ? '' : String(losPpm).trim();
+    const numeric = trimmed === '' ? null : Number(trimmed);
+    if (trimmed !== '' && Number.isNaN(numeric)) {
+      Alert.alert('Invalid value', 'Please enter a valid number for LOS PPM or leave it empty.');
+      return;
+    }
+
+    setSaving(true);
     try {
-      // Update indicator names (if changed)
-      const namePromises = indicatorname.map(({ id, name }) =>
-        fetch(`${base}/api/indicators/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
-        }).then(async (r) => {
-          if (!r.ok) {
-            const text = await r.text().catch(() => '');
-            throw new Error(`Failed updating indicator ${id}: ${r.status} ${text}`);
-          }
-          return r.json().catch(() => ({}));
-        }),
-      );
-      await Promise.all(namePromises);
+      const payload = trimmed === '' ? {} : { los_ppm: numeric };
 
-      // Update reverse setting
-      const reverseRes = await fetch(`${base}/api/reverse-indicator/${serialNumber}`, {
+      const res = await fetch(`${BASE}/api/thresholds/${serialNumber}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isReversed }),
+        body: JSON.stringify(payload),
       });
-      if (!reverseRes.ok) {
-        const t = await reverseRes.text().catch(() => '');
-        throw new Error(`Failed to update reverse-indicator: ${reverseRes.status} ${t}`);
+
+      const text = await res.text().catch(() => '');
+      let body = text;
+      try {
+        body = JSON.parse(text);
+      } catch (_) {}
+
+      if (!res.ok) {
+        console.error('Failed to save los_ppm', res.status, body);
+        throw new Error(`Save failed: ${res.status} ${typeof body === 'string' ? body : JSON.stringify(body)}`);
       }
 
-      // Update thresholds -- send the thresholds object as-is.
-      // Backend expected shape (based on previous server code) is:
-      // either mapping { DI1: 10, DI2: 5 } or indicator->value mapping { los_ppm: 25 }
-      const thrRes = await fetch(`${base}/api/thresholds/${serialNumber}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(thresholds),
-      });
-      if (!thrRes.ok) {
-        const t = await thrRes.text().catch(() => '');
-        throw new Error(`Failed to update thresholds: ${thrRes.status} ${t}`);
-      }
-
-      // notify caller
+      // Call onUpdate if provided by main page so it can refresh
       if (typeof onUpdate === 'function') {
-        onUpdate({
-          updatedIndicatornames: indicatorname,
-          updatedReversestate: isReversed,
-          updatedThresholds: thresholds,
-        });
+        try {
+          onUpdate({ los_ppm: numeric === null ? null : numeric });
+        } catch (e) {
+          console.warn('onUpdate callback error', e);
+        }
       }
 
-      Alert.alert('Success', 'Settings saved successfully');
-      navigation.goBack();
+      // Reset navigation stack to Main so user cannot go back to Settings.
+      // Replace 'Main' with the actual route name of your main page if different.
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Main', params: { refresh: Date.now() } }],
+      });
+
+      // Show success (optional). After reset the screen will change.
+      // Keep this Alert short; it may be dismissed quickly on navigation.
+      // Alert.alert('Success', 'LOS PPM threshold updated'); // optional
     } catch (err) {
-      console.error('handleSubmit error', err);
+      console.error('handleSave error', err);
       Alert.alert('Save failed', String(err.message || err));
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
+
+  if (!serialNumber) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center' }]}>
+        <Text style={{ color: '#fff' }}>No serial number provided.</Text>
+      </View>
+    );
+  }
 
   return (
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <View style={styles.container}>
-          {/* Logo top-left */}
-          <View style={styles.logoContainer}>
-            <Image style={styles.logo} source={require('../Assets/boreal.png')} resizeMode="contain" />
-          </View>
+      <View style={styles.outer}>
+        <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
+          <View style={styles.centerWrapper}>
+            <View style={styles.card}>
+              <Text style={styles.title}>LOS PPM THRESHOLD</Text>
 
-          <Text style={styles.pageTitle}>Settings</Text>
+              {loading && <ActivityIndicator size="small" color="#fff" style={{ marginVertical: 12 }} />}
 
-          {/* Indicator Names Section */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>INDICATOR NAMES</Text>
-            <View style={styles.indicatorList}>
-              {indicatorname.map(({ id, name }, index) => (
-                <View key={id || index} style={styles.indicatorWrapper}>
-                  {isEditingNames ? (
-                    <TextInput
-                      style={styles.textInput}
-                      value={name}
-                      onChangeText={(newName) => handleNameChange(id, newName)}
-                      placeholder={`Indicator ${index + 1}`}
-                      placeholderTextColor="#888"
-                    />
-                  ) : (
-                    <Text style={styles.indicatorName}>{name}</Text>
-                  )}
-                </View>
-              ))}
-              {indicatorname.length === 0 && <Text style={{ color: '#bbb' }}>No indicators available.</Text>}
-            </View>
-            <View style={styles.buttonRow}>
-              {!isEditingNames ? (
-                <TouchableOpacity style={styles.actionButton} onPress={() => setIsEditingNames(true)}>
-                  <Text style={styles.buttonText}>Edit</Text>
-                </TouchableOpacity>
-              ) : (
+              <View style={styles.fieldRow}>
+                <Text style={styles.label}>los_ppm</Text>
+                <TextInput
+                  style={styles.input}
+                  keyboardType="numeric"
+                  placeholder="Enter LOS PPM"
+                  placeholderTextColor="#bbb"
+                  value={losPpm === null ? '' : String(losPpm)}
+                  onChangeText={setLosPpm}
+                />
+              </View>
+
+              <Text style={styles.hint}>Edit the LOS PPM value fetched from backend. Leave empty to remove.</Text>
+
+              <View style={styles.rowButtons}>
                 <TouchableOpacity
-                  style={styles.actionButton}
+                  style={[styles.btn, styles.cancel]}
                   onPress={() => {
-                    setIsEditingNames(false);
+                    navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
                   }}
+                  disabled={saving}
                 >
-                  <Text style={styles.buttonText}>Save</Text>
+                  <Text style={styles.btnText}>Cancel</Text>
                 </TouchableOpacity>
-              )}
-            </View>
-          </View>
 
-          {/* Thresholds Section */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>INDICATOR THRESHOLDS</Text>
-            <View style={styles.indicatorList}>
-              {indicatorname.map(({ id, name }, index) => {
-                const diKey = `DI${index + 1}`;
-                // prefer DI key, fallback to indicator name key if present in thresholds
-                const value = thresholds[diKey] !== undefined ? thresholds[diKey] : (thresholds[name] !== undefined ? thresholds[name] : '');
-                return (
-                  <View key={id || diKey} style={styles.indicatorWrapper}>
-                    <Text style={styles.indicatorName}>{name}</Text>
-                    {isEditingThresholds ? (
-                      <TextInput
-                        style={styles.textInput}
-                        keyboardType="numeric"
-                        placeholder="Threshold"
-                        placeholderTextColor="#888"
-                        value={value === undefined || value === null ? '' : String(value)}
-                        onChangeText={(val) => handleThresholdChange(diKey, val)}
-                      />
-                    ) : (
-                      <Text style={styles.thresholdValue}>Threshold: {value === '' || value === undefined ? 'Not Set' : String(value)}</Text>
-                    )}
-                  </View>
-                );
-              })}
-            </View>
-            <View style={styles.buttonRow}>
-              {!isEditingThresholds ? (
-                <TouchableOpacity style={styles.actionButton} onPress={() => setIsEditingThresholds(true)}>
-                  <Text style={styles.buttonText}>Edit</Text>
+                <TouchableOpacity
+                  style={[styles.btn, styles.save]}
+                  onPress={handleSave}
+                  disabled={saving}
+                >
+                  <Text style={styles.btnText}>{saving ? 'Saving...' : 'Submit'}</Text>
                 </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={styles.actionButton} onPress={() => setIsEditingThresholds(false)}>
-                  <Text style={styles.buttonText}>Save</Text>
-                </TouchableOpacity>
-              )}
+              </View>
             </View>
           </View>
+        </ScrollView>
 
-          {/* Reverse Indicator Section */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>REVERSE INDICATOR</Text>
-            <View style={styles.switchRow}>
-              <Switch value={isReversed} onValueChange={setIsReversed} />
-              <Text style={styles.switchLabel}>{isReversed ? 'Enabled' : 'Disabled'}</Text>
-            </View>
-          </View>
-
-          <View style={{ width: '100%', alignItems: 'center' }}>
-            <TouchableOpacity style={styles.submitButton} onPress={handleSubmit} disabled={loading}>
-              <Text style={styles.buttonText}>{loading ? 'Saving...' : 'Submit'}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionButton, { marginTop: 12, backgroundColor: '#2b2b2b' }]}
-              onPress={() => navigation.goBack()}
-            >
-              <Text style={styles.buttonText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.subTextdown}>Powered by SONIC</Text>
+        <View style={styles.footer}>
+          <Text style={styles.powered}>Powered by SONIC</Text>
         </View>
-      </ScrollView>
+      </View>
     </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   background: { flex: 1, width: '100%', height: '100%' },
-  scrollContainer: { flexGrow: 1, width: '100%' },
-  container: {
+  outer: { flex: 1 },
+  scrollContainer: { flexGrow: 1 },
+  centerWrapper: {
     flex: 1,
+    justifyContent: 'center', // centers vertically
     alignItems: 'center',
-    padding: 20,
-    paddingTop: 28,
-  },
-  logoContainer: {
-    position: 'absolute',
-    left: 16,
-    top: 18,
-    width: 140,
-    height: 56,
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-  },
-  logo: {
-    width: 140,
-    height: 56,
-    resizeMode: 'contain',
-    opacity: 0.95,
-  },
-  subTextdown: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.4)',
-    textAlign: 'center',
-    marginBottom: 10,
-    marginTop: 20,
-  },
-  pageTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#fff',
-    marginVertical: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
   },
   card: {
     width: '100%',
-    backgroundColor: 'rgba(31,31,31,0.9)',
-    padding: 16,
+    maxWidth: 760,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    padding: 22,
     borderRadius: 12,
-    marginBottom: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 4,
+    elevation: 6,
   },
-  sectionTitle: {
-    fontSize: 16,
+  title: {
+    fontSize: 18,
     color: '#fff',
-    marginBottom: 12,
-    fontWeight: '600',
+    marginBottom: 14,
+    fontWeight: '700',
   },
-  indicatorList: {
-    marginBottom: 6,
-  },
-  indicatorWrapper: {
+  fieldRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2f2f2f',
-    paddingBottom: 8,
+    marginBottom: 8,
   },
-  indicatorName: {
-    fontSize: 15,
+  label: {
+    fontSize: 16,
     color: '#fff',
     flex: 1,
   },
-  textInput: {
-    width: '45%',
-    backgroundColor: '#333',
-    padding: 10,
+  input: {
+    width: 140,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     color: '#fff',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#444',
-  },
-  thresholdValue: {
-    fontSize: 15,
-    color: '#bbb',
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 6,
-  },
-  actionButton: {
-    backgroundColor: '#3d3b3b',
-    paddingVertical: 10,
-    paddingHorizontal: 28,
-    borderRadius: 26,
-    elevation: 3,
-    marginHorizontal: 6,
-  },
-  submitButton: {
-    backgroundColor: '#3d3b3b',
-    paddingVertical: 14,
-    paddingHorizontal: 44,
-    borderRadius: 28,
-    marginTop: 12,
-    elevation: 4,
-  },
-  buttonText: {
-    fontSize: 15,
-    color: '#fff',
+    borderColor: 'rgba(255,255,255,0.08)',
     textAlign: 'center',
   },
-  switchRow: {
+  hint: {
+    color: '#ddd',
+    fontSize: 13,
+    marginTop: 6,
+    marginBottom: 12,
+  },
+  rowButtons: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
   },
-  switchLabel: {
-    fontSize: 15,
-    color: '#bbb',
-    marginLeft: 12,
+  btn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginHorizontal: 6,
   },
-  subTextdown: {
-    marginTop: 18,
+  cancel: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  save: {
+    backgroundColor: '#2a8f2a',
+  },
+  btnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  footer: {
+    height: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.03)',
+  },
+  powered: {
     color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
   },
 });

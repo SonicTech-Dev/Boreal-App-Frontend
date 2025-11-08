@@ -8,7 +8,7 @@ export default function ChangePage() {
     const navigation = useNavigation();
 
     useEffect(() => {
-        fetch('http://192.168.1.101:3004/api/remote_stations')
+        fetch('http://192.168.1.106:3004/api/remote_stations')
             .then((response) => response.json())
             .then((data) => {
                 const sortedData = data
@@ -33,7 +33,7 @@ export default function ChangePage() {
     const handleSubmit = async () => {
         try {
             const updateNamesPromises = serialNames.map(({ id, name }) =>
-                fetch(`http://192.168.1.101:3004/api/remote_stations/${id}`, {
+                fetch(`http://192.168.1.106:3004/api/remote_stations/${id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name }),
