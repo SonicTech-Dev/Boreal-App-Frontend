@@ -15,7 +15,7 @@ const { io } = require('socket.io-client');
 import Icon from 'react-native-vector-icons/Ionicons';
 
 const IndicatorApp = ({ route, navigation }) => {
-  const [tableData, setTableData] = useState([]);
+  const [tableData, setTableData] = useState([]); // will store only PPM rows (newest first)
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -32,76 +32,49 @@ const IndicatorApp = ({ route, navigation }) => {
   const [losReading, setLosReading] = useState(null); // Current Los Value shown in big indicator
   const [threshold, setThreshold] = useState(null); // numeric threshold for los_ppm
 
+  // Keep refs to avoid stale closures in socket handlers
+  const thresholdRef = useRef(null);
+  const losReadingRef = useRef(null);
+
   const indicatorBigLabel = 'Gas Finder-PPM'; // Big indicator label (PPM)
 
   const pickHost = () => {
     if (hostOverride) return hostOverride;
-    const defaultHost = '192.168.1.106';
+    const defaultHost = '3.227.99.254';
     if (Platform.OS === 'android') {
       return defaultHost;
     }
     return defaultHost;
   };
 
-  // Normalize incoming param keys and produce display name + formatted value
-  const formatIndicator = (key, rawValue) => {
-    const degree = '\u00B0';
-    const originalKey = String(key);
-    const keyNorm = originalKey.toLowerCase().replace(/[\s\-_()]/g, '');
+  // Keep refs up to date
+  useEffect(() => {
+    thresholdRef.current = threshold;
+  }, [threshold]);
+  useEffect(() => {
+    losReadingRef.current = losReading;
+  }, [losReading]);
 
-    // coerce numeric values when possible
-    const num = (typeof rawValue === 'number') ? rawValue : (rawValue !== null && rawValue !== undefined ? Number(rawValue) : NaN);
-    const isNumber = !Number.isNaN(num);
-
-    // PPM variants -> Gas Finder-PPM
-    if (keyNorm.includes('los') && keyNorm.includes('ppm') || keyNorm.includes('losppm') || keyNorm === 'ppm' || keyNorm.includes('ppmvalue')) {
-      const displayName = 'Gas Finder-PPM';
-      const value = isNumber ? Math.round(num) : rawValue;
-      return { displayName, value };
-    }
-
-    // Temperature
-    if (keyNorm.includes('temp') || keyNorm.includes('temperature') || keyNorm.includes('℃') || keyNorm.includes('celsius')) {
-      const displayName = `Temp(${degree}C)`;
-      const value = isNumber ? `${num.toFixed(1)}${degree}C` : rawValue;
-      return { displayName, value };
-    }
-
-    // RX-light variants
-    if (keyNorm.includes('rx') && (keyNorm.includes('light') || keyNorm.includes('led') || keyNorm === 'rx')) {
-      const displayName = 'RX-light';
-      const value = isNumber ? num : rawValue;
-      return { displayName, value };
-    }
-
-    // R2
-    if (keyNorm === 'r2' || keyNorm.includes('r2')) {
-      const displayName = 'R2';
-      const value = isNumber ? num : rawValue;
-      return { displayName, value };
-    }
-
-    // HeartBeat variants
-    if (keyNorm.includes('heartbeat') || keyNorm.includes('heart') || keyNorm.includes('hb')) {
-      const displayName = 'HeartBeat';
-      const value = isNumber ? Math.round(num) : rawValue;
-      return { displayName, value };
-    }
-
-    // Fallback: present a cleaned title (remove los if present)
-    let cleaned = originalKey.replace(/los/ig, '').replace(/[_\-]/g, ' ').trim();
-    if (!cleaned) cleaned = originalKey;
-    // Title case fallback
-    const displayName = cleaned.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    const value = isNumber ? (Number.isInteger(num) ? num : Number(num.toFixed(2))) : rawValue;
-    return { displayName, value };
+  // Simple helper to decide if a key/value pair represents a PPM/LOS reading.
+  const isPpmKey = (key) => {
+    if (!key) return false;
+    const k = String(key).toLowerCase();
+    return k.includes('ppm') || (k.includes('los') && k.includes('ppm')) || k === 'ppm' || k.includes('ppmvalue');
   };
 
-  // WebSocket: receive latest readings (handles multiple params) and device ping/status updates
+  // Format display value for PPM (we store numeric if possible)
+  const normalizePpmValue = (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number') return v;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  // SOCKET: subscribe to MQTT forwarding and device_status events, but only push PPM rows into tableData
   useEffect(() => {
+    if (!serialNumber) return undefined;
     const host = pickHost();
-    const protocol = 'http';
-    const socketUrl = `${protocol}://${host}:3004`;
+    const socketUrl = `http://${host}:3004`;
     const socket = io(socketUrl, {
       reconnection: true,
       reconnectionAttempts: 5,
@@ -109,22 +82,24 @@ const IndicatorApp = ({ route, navigation }) => {
       timeout: 20000,
     });
 
-    socket.on('connect', () => console.log('WebSocket connected to', socketUrl));
-    socket.on('disconnect', () => console.log('WebSocket disconnected'));
+    socket.on('connect', () => {
+      console.log('WebSocket connected to', socketUrl);
+    });
+    socket.on('disconnect', () => {
+      console.log('WebSocket disconnected');
+    });
 
-    // Helper to handle ping/status payload variants from server via websocket.
+    // device status events
     const handlePingPayload = (payload) => {
       if (!payload) return;
-      // accept many possible keys
       const serial = payload.serial_number ?? payload.serialNumber ?? payload.serial ?? payload.sn;
       let online = payload.online ?? payload.isOnline ?? payload.is_online ?? payload.status ?? payload.up;
       if (typeof online === 'string') {
         const s = online.toLowerCase();
-        if (s === 'online' || s === 'true' || s === '1') online = true;
-        else online = false;
+        online = s === 'online' || s === 'true' || s === '1';
       } else if (typeof online === 'number') {
         online = online === 1;
-      } else if (typeof online !== 'boolean') {
+      } else {
         online = !!online;
       }
       if (!serial) return;
@@ -133,70 +108,78 @@ const IndicatorApp = ({ route, navigation }) => {
       }
     };
 
-    // Common event names the backend might emit when it finishes a ping or status check
+    socket.on('device_status', handlePingPayload);
     socket.on('device_ping', handlePingPayload);
     socket.on('ping_result', handlePingPayload);
-    socket.on('device_status', handlePingPayload);
     socket.on('ping', handlePingPayload);
 
-    // mqtt_message event emits sensor readings as before
+    // snapshot (when server sends current statuses on connect)
+    socket.on('device_status_snapshot', (snapshot) => {
+      try {
+        if (!Array.isArray(snapshot)) return;
+        const match = snapshot.find(s => s.serial_number === serialNumber);
+        if (match) handlePingPayload(match);
+      } catch (e) {
+        // ignore
+      }
+    });
+
+    // Only handle PPM entries for the live table and big indicator
     socket.on('mqtt_message', (msg) => {
-      // extract params object (supporting payload.params or payload itself)
+      // msg.payload OR msg.params may contain readings
       let params = null;
       if (msg.payload && typeof msg.payload === 'object') {
         params = (msg.payload.params && typeof msg.payload.params === 'object') ? msg.payload.params : msg.payload;
       } else if (msg.params && typeof msg.params === 'object') {
         params = msg.params;
       }
-      // If the message itself is a ping/status emitted through mqtt_message, try to detect and handle it:
-      if (msg.type && String(msg.type).toLowerCase().includes('ping')) {
-        handlePingPayload(msg.payload || msg);
-      }
       if (!params || typeof params !== 'object') return;
 
+      // Optionally filter by serial_number in msg if provided
+      const msgSerial = msg.serial_number ?? (msg.payload && (msg.payload.serial_number || msg.payload.serial)) ?? undefined;
+      if (msgSerial && serialNumber && String(msgSerial) !== String(serialNumber)) {
+        // message for another device — ignore
+        return;
+      }
+
       const timestamp = new Date().toLocaleString();
-      const newRows = [];
+      const newPpmRows = [];
 
+      // iterate params and only keep ppm entries
       Object.entries(params).forEach(([k, v]) => {
-        const { displayName, value } = formatIndicator(k, v);
-
-        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${displayName}`;
-        newRows.push({
+        if (!isPpmKey(k)) return;
+        const numeric = normalizePpmValue(v);
+        const displayVal = numeric !== null ? numeric : v;
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-ppm`;
+        newPpmRows.push({
           id,
           TIMESTAMP: timestamp,
-          INDICATOR: displayName,
-          VALUE: value,
+          INDICATOR: 'Gas Finder-PPM',
+          VALUE: displayVal,
           rawKey: k,
-          rawValue: v
+          rawValue: v,
         });
 
-        // If this is the PPM (LOS) reading, update the big indicator and color
-        const keyNorm = String(k).toLowerCase();
-        if ((keyNorm.includes('los') && keyNorm.includes('ppm')) || keyNorm.includes('ppm') || displayName === 'Gas Finder-PPM') {
-          const numeric = (typeof v === 'number') ? v : Number(v);
-          if (!Number.isNaN(numeric)) {
-            setLosReading(numeric);
-            if (threshold !== null && numeric > threshold) {
-              setIndicatorColor('#b10303');
-            } else {
-              setIndicatorColor('#16b800');
-            }
-          } else {
-            setLosReading(v);
-          }
+        // update big indicator
+        if (numeric !== null) {
+          setLosReading(numeric);
+          const currentThreshold = thresholdRef.current;
+          const t = Number.isFinite(Number(currentThreshold)) ? Number(currentThreshold) : null;
+          setIndicatorColor(t !== null && numeric > t ? '#b10303' : '#16b800');
+        } else {
+          setLosReading(v);
         }
       });
 
-      if (newRows.length > 0) {
+      if (newPpmRows.length > 0) {
         setTableData(prev => {
-          const next = [...newRows, ...prev].slice(0, 1000);
+          const next = [...newPpmRows, ...prev].slice(0, 1000);
           return next;
         });
+
         if (currentView === 'live') {
           setTimeout(() => {
-            try {
-              flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-            } catch (e) { /* ignore */ }
+            try { flatListRef.current?.scrollToOffset({ offset: 0, animated: true }); } catch (e) { /* ignore */ }
           }, 50);
         }
       }
@@ -204,22 +187,20 @@ const IndicatorApp = ({ route, navigation }) => {
 
     return () => {
       try {
+        socket.off('device_status', handlePingPayload);
         socket.off('device_ping', handlePingPayload);
         socket.off('ping_result', handlePingPayload);
-        socket.off('device_status', handlePingPayload);
         socket.off('ping', handlePingPayload);
+        socket.off('device_status_snapshot');
         socket.off('mqtt_message');
         socket.disconnect();
       } catch (e) {
-        console.warn('Error disconnecting socket or removing listeners', e);
+        // ignore
       }
     };
-    // Note: intentionally not depending on threshold here to avoid reattaching socket listeners repeatedly.
-    // serialNumber and host changes will recreate the effect.
-  }, [serialNumber, route.params?.host]);
+  }, [serialNumber, route.params?.host, currentView]);
 
-  // Fetch threshold from backend when page mounts AND whenever the screen gains focus,
-  // so returning from Settings will refresh the threshold.
+  // Fetch threshold when mounted and on focus
   useEffect(() => {
     if (!serialNumber) return;
     let cancelled = false;
@@ -230,65 +211,118 @@ const IndicatorApp = ({ route, navigation }) => {
         const response = await fetch(`http://${host}:3004/api/thresholds/${serialNumber}`);
         if (response.ok) {
           const data = await response.json();
-          // Accept various shapes; prefer los_ppm
-          const los = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
-          if (!cancelled) setThreshold(los ?? null);
+          const losRaw = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
+          const los = losRaw === null || losRaw === undefined ? null : Number(losRaw);
+          if (!cancelled) {
+            setThreshold(Number.isFinite(los) ? los : null);
+            thresholdRef.current = Number.isFinite(los) ? los : null;
+            // recompute indicator color against last reading immediately
+            const lastLos = losReadingRef.current;
+            if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos))) {
+              const t = Number.isFinite(Number(los)) ? Number(los) : null;
+              setIndicatorColor(t !== null && Number(lastLos) > t ? '#b10303' : '#16b800');
+            }
+          }
         } else {
-          if (!cancelled) setThreshold(null);
+          if (!cancelled) {
+            setThreshold(null);
+            thresholdRef.current = null;
+          }
         }
-      } catch (error) {
-        console.warn('Failed to fetch threshold:', error);
-        if (!cancelled) setThreshold(null);
+      } catch (err) {
+        console.warn('Failed to fetch threshold:', err);
+        if (!cancelled) {
+          setThreshold(null);
+          thresholdRef.current = null;
+        }
       }
     };
 
-    // Initial fetch when component mounts
     fetchThreshold();
-
-    // Also fetch every time the screen comes into focus (i.e. after returning from Settings)
-    const unsubscribe = navigation.addListener('focus', () => {
+    const unsub = navigation.addListener('focus', () => {
       fetchThreshold();
+      // Also fetch device immediate ping when returning to page
+      (async () => {
+        try {
+          const res = await fetch(`http://${pickHost()}:3004/api/ping/${serialNumber}`);
+          if (res.ok) {
+            const body = await res.json();
+            const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
+            setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
+          }
+        } catch (e) {
+          // ignore
+        }
+      })();
     });
 
     return () => {
       cancelled = true;
-      if (typeof unsubscribe === 'function') unsubscribe();
+      if (typeof unsub === 'function') unsub();
     };
   }, [serialNumber, route.params?.host, navigation]);
-  // Derive alarms list: entries where indicator is Gas Finder-PPM and numeric value > threshold
+
+  // initial ping when component mounts so status shows immediately
+  useEffect(() => {
+    if (!serialNumber) return;
+    (async () => {
+      try {
+        const res = await fetch(`http://${pickHost()}:3004/api/ping/${serialNumber}`);
+        if (res.ok) {
+          const body = await res.json();
+          const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
+          setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
+        }
+      } catch (e) {
+        console.warn('initial ping failed', e);
+      }
+    })();
+  }, [serialNumber, route.params?.host]);
+
+  // Recompute indicator color when threshold or last LOS reading changes.
+  useEffect(() => {
+    if (losReading === null || losReading === undefined) return;
+    const numeric = (typeof losReading === 'number') ? losReading : Number(losReading);
+    if (Number.isNaN(numeric)) return;
+    if (threshold === null || threshold === undefined) {
+      setIndicatorColor('#16b800'); // default green if no threshold
+      return;
+    }
+    const t = Number(threshold);
+    if (Number.isNaN(t)) {
+      setIndicatorColor('#16b800');
+      return;
+    }
+    setIndicatorColor(numeric > t ? '#b10303' : '#16b800');
+  }, [threshold, losReading]);
+
+  // Derive alarms list from tableData (tableData now only contains PPM rows)
   const alarms = useMemo(() => {
     if (threshold === null || threshold === undefined) return [];
     return tableData.filter((row) => {
       try {
-        const keyNorm = String(row.rawKey || '').toLowerCase();
-        const isPPM = row.INDICATOR === 'Gas Finder-PPM' || keyNorm.includes('ppm') || String(row.INDICATOR).toLowerCase().includes('ppm');
-        if (!isPPM) return false;
         const numeric = (typeof row.rawValue === 'number') ? row.rawValue : Number(row.rawValue);
         if (Number.isNaN(numeric)) return false;
         return numeric > threshold;
       } catch (e) {
         return false;
       }
-    }).slice(0, 1000); // cap
+    }).slice(0, 1000);
   }, [tableData, threshold]);
 
+  // Render only Date & Time + PPM value for both Live (Real time) and Alarms
   const renderRow = ({ item }) => {
     const rawVal = item.rawValue;
     const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
-    const isPPM = item.INDICATOR === 'Gas Finder-PPM' || String(item.rawKey || '').toLowerCase().includes('ppm');
-    const displayValue = isPPM && !Number.isNaN(numeric) ? `${numeric} PPM` : String(item.VALUE);
+    const displayValue = !Number.isNaN(numeric) ? `${numeric} PPM` : String(item.VALUE);
 
-    let valueStyle = {};
-    if (threshold !== null && isPPM && !Number.isNaN(numeric) && numeric > threshold) {
-      valueStyle = { color: '#b10303', fontWeight: '700' };
-    } else {
-      valueStyle = { color: '#111' };
-    }
+    const valueStyle = (threshold !== null && !Number.isNaN(numeric) && numeric > threshold)
+      ? { color: '#b10303', fontWeight: '700' }
+      : { color: '#111' };
 
     return (
       <View style={styles.row}>
         <Text style={[styles.cell, styles.dateCell]}>{item.TIMESTAMP}</Text>
-        <Text style={[styles.cell, styles.dataCell]}>{item.INDICATOR}</Text>
         <Text style={[styles.cell, styles.statusCell, valueStyle]}>{displayValue}</Text>
       </View>
     );
@@ -306,7 +340,6 @@ const IndicatorApp = ({ route, navigation }) => {
     return (
       <View style={styles.row}>
         <Text style={[styles.cell, styles.dateCell]}>{item.TIMESTAMP}</Text>
-        <Text style={[styles.cell, styles.dataCell]}>Gas Finder-PPM</Text>
         <Text style={[styles.cell, styles.statusCell, valueStyle]}>{displayValue}</Text>
       </View>
     );
@@ -332,6 +365,9 @@ const IndicatorApp = ({ route, navigation }) => {
   // Helper to style tab buttons
   const tabStyle = (name) => (activeButton === name ? styles.tabActive : styles.tabInactive);
   const tabTextStyle = (name) => (activeButton === name ? styles.tabTextActive : styles.tabTextInactive);
+
+  // For the live view we use tableData (PPM rows). For alarms use alarms.
+  const liveData = tableData;
 
   return (
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
@@ -380,7 +416,7 @@ const IndicatorApp = ({ route, navigation }) => {
             onPressIn={() => { setActiveButton('live'); }}
             onPress={() => { setCurrentView('live'); setActiveButton('live'); }}
           >
-            <Text style={[styles.buttonText, tabTextStyle('live')]}>Live</Text>
+            <Text style={[styles.buttonText, tabTextStyle('live')]}>Real time</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -399,19 +435,18 @@ const IndicatorApp = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Contained table (fixed size) */}
+        {/* Contained table (fixed size) - headers changed to Date/Time + Value */}
         <View style={styles.box}>
           {currentView === 'live' && (
             <>
               <View style={styles.header}>
                 <Text style={[styles.heading, styles.dateHead]}>DATE & TIME</Text>
-                <Text style={[styles.heading, styles.dataCell]}>INDICATOR</Text>
-                <Text style={[styles.heading, styles.statusHead]}>VALUE</Text>
+                <Text style={[styles.heading, styles.statusHead]}>PPM</Text>
               </View>
               <FlatList
                 ref={flatListRef}
                 style={styles.tablebox}
-                data={tableData}
+                data={liveData}
                 renderItem={renderRow}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.body}
@@ -431,8 +466,7 @@ const IndicatorApp = ({ route, navigation }) => {
             <>
               <View style={styles.header}>
                 <Text style={[styles.heading, styles.dateHead]}>DATE & TIME</Text>
-                <Text style={[styles.heading, styles.dataCell]}>ALARM</Text>
-                <Text style={[styles.heading, styles.statusHead]}>VALUE</Text>
+                <Text style={[styles.heading, styles.statusHead]}>PPM</Text>
               </View>
 
               {threshold === null ? (
@@ -699,11 +733,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     color: '#111',
   },
-  dataCell: {
-    flex: 2,
-    textAlign: 'center',
-    color: '#111',
-  },
   statusHead: {
     flex: 1,
     textAlign: 'center',
@@ -719,11 +748,6 @@ const styles = StyleSheet.create({
     flex: 3,
     textAlign: 'left',
     paddingLeft: 10,
-    color: '#111',
-  },
-  dataCell: {
-    flex: 2,
-    textAlign: 'center',
     color: '#111',
   },
   statusCell: {

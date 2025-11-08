@@ -10,7 +10,7 @@ export default function SerialNumberPage({ navigation }) {
 
   const fetchSerialList = async () => {
     try {
-      const res = await fetch('http://192.168.1.106:3004/api/remote_stations');
+      const res = await fetch('http://3.227.99.254:3004/api/remote_stations');
       const data = await res.json();
       if (!Array.isArray(data)) {
         console.warn('serial_list returned unexpected shape', data);

@@ -22,7 +22,7 @@ export default function SettingsPage({ route, navigation }) {
   const [saving, setSaving] = useState(false);
 
   // Static backend host
-  const HOST_IP = '192.168.1.106';
+  const HOST_IP = '3.227.99.254';
   const BASE = `http://${HOST_IP}:3004`;
 
   useEffect(() => {
@@ -147,14 +147,25 @@ export default function SettingsPage({ route, navigation }) {
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
       <View style={styles.outer}>
         <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
+          {/* Top: logo row */}
+          <View style={styles.logoRow}>
+            <Image style={styles.topLogo} source={require('../Assets/boreal.png')} resizeMode="contain" />
+          </View>
+
+          {/* Second row: centered, larger heading */}
+          <View style={styles.headingRow}>
+            <Text style={styles.headingText}>Settings</Text>
+          </View>
+
           <View style={styles.centerWrapper}>
             <View style={styles.card}>
-              <Text style={styles.title}>LOS PPM THRESHOLD</Text>
+              {/* Visible label change only */}
+              <Text style={styles.title}>Gas Finder-PPM Threshold</Text>
 
               {loading && <ActivityIndicator size="small" color="#fff" style={{ marginVertical: 12 }} />}
 
               <View style={styles.fieldRow}>
-                <Text style={styles.label}>los_ppm</Text>
+                <Text style={styles.label}>Gas Finder-PPM</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="numeric"
@@ -165,7 +176,7 @@ export default function SettingsPage({ route, navigation }) {
                 />
               </View>
 
-              <Text style={styles.hint}>Edit the LOS PPM value fetched from backend. Leave empty to remove.</Text>
+              {/* Hint removed as requested */}
 
               <View style={styles.rowButtons}>
                 <TouchableOpacity
@@ -202,6 +213,29 @@ const styles = StyleSheet.create({
   background: { flex: 1, width: '100%', height: '100%' },
   outer: { flex: 1 },
   scrollContainer: { flexGrow: 1 },
+  logoRow: {
+    width: '100%',
+    paddingTop: 18,
+    paddingHorizontal: 16,
+    alignItems: 'flex-start',
+  },
+  topLogo: {
+    width: 120,
+    height: 44,
+    opacity: 0.95,
+  },
+  headingRow: {
+    width: '100%',
+    paddingTop: 8,
+    paddingBottom: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headingText: {
+    fontSize: 22, // a little larger
+    color: '#fff',
+    fontWeight: '800',
+  },
   centerWrapper: {
     flex: 1,
     justifyContent: 'center', // centers vertically
@@ -244,12 +278,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     textAlign: 'center',
-  },
-  hint: {
-    color: '#ddd',
-    fontSize: 13,
-    marginTop: 6,
-    marginBottom: 12,
   },
   rowButtons: {
     flexDirection: 'row',

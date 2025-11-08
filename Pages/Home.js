@@ -1,5 +1,6 @@
-import React, { version } from 'react';
-import { StyleSheet, Text, Button, View, Image, TouchableOpacity, ImageBackground, Dimensions, SafeAreaView } from 'react-native';
+import React from 'react';
+import { StyleSheet, Text, View, Image, TouchableOpacity, ImageBackground, SafeAreaView } from 'react-native';
+
 export default function App({ navigation }) {
     return (
         <ImageBackground
@@ -9,6 +10,9 @@ export default function App({ navigation }) {
         >
             <SafeAreaView style={styles.safeArea}>
                 <View style={styles.container}>
+                    {/* Heading above the logo */}
+                    <Text style={styles.headerTitle}>REMOTE CH4 MONITORING</Text>
+
                     {/* Logo Section */}
                     <View style={[styles.logoContainer, styles.elevation]}>
                         <Image 
@@ -17,6 +21,7 @@ export default function App({ navigation }) {
                             resizeMode="contain"
                         /> 
                     </View>
+
                     <View style={[styles.borealpicContainer, styles.elevation]}>
                         <Image 
                             style={styles.borealpic} 
@@ -25,6 +30,7 @@ export default function App({ navigation }) {
                         /> 
                     </View>                    
                 </View>
+
                 {/* Navigation Button for New Page */}
                 <TouchableOpacity
                     style={styles.button}
@@ -32,6 +38,7 @@ export default function App({ navigation }) {
                 >
                     <Text style={styles.buttonText}>Go to Main Page</Text>
                 </TouchableOpacity>
+
                 <Text style={styles.version}>V1.68  2025</Text>
                 <Text style={styles.subText}>Powered by SONIC</Text>
             </SafeAreaView>
@@ -44,7 +51,6 @@ const styles = StyleSheet.create({
         flex: 1,
         width: '100%',
         height: '100%',
-        
     },
     safeArea: {
         flex: 1,
@@ -54,6 +60,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 20,
+    },
+    headerTitle: {
+        fontSize: 35,
+        fontWeight: '800',
+        color: '#dae0d9ff',
+        textAlign: 'center',
+        marginBottom: 12,
+        textShadowColor: 'rgba(0,0,0,0.6)',
+        textShadowOffset: { width: 0, height: 2 },
+        textShadowRadius: 4,
     },
     logoContainer: {
         width: '100%',
@@ -123,7 +139,7 @@ const styles = StyleSheet.create({
         marginBottom: 30
     },
     button: {
-        backgroundColor: 'rgba(255, 255, 255, 0.58))',
+        backgroundColor: 'rgba(255, 255, 255, 0.58)',
         paddingVertical: 15,
         paddingHorizontal: 40,
         borderRadius: 15,
