@@ -36,6 +36,18 @@ const IndicatorApp = ({ route, navigation }) => {
   const thresholdRef = useRef(null);
   const losReadingRef = useRef(null);
 
+  // Keep a set of cleared fingerprints so we ignore replays of cleared rows
+  const clearedSetRef = useRef(new Set());
+  // Keep a set of seen fingerprints to avoid duplicates in-session
+  const seenSetRef = useRef(new Set());
+
+  // Track whether this screen is focused (visible) so we only read/process messages while mounted/visible
+  const isFocusedRef = useRef(false);
+
+  // Skip the first PPM row received after mount / focus / clear.
+  // When true the next PPM row encountered will be ignored and then this flag is cleared.
+  const skipFirstRef = useRef(true);
+
   const indicatorBigLabel = 'Gas Finder-PPM'; // Big indicator label (PPM)
 
   const pickHost = () => {
@@ -47,6 +59,21 @@ const IndicatorApp = ({ route, navigation }) => {
     return defaultHost;
   };
 
+  // Helper to format time as hh:mm:ss AM/PM
+  const formatTime = (d) => {
+    let hours = d.getHours();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    const hh = String(hours).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss} ${ampm}`;
+  };
+
+  // current time state (hh:mm:ss AM/PM) to show below online/offline indicator
+  const [currentTime, setCurrentTime] = useState(formatTime(new Date()));
+
   // Keep refs up to date
   useEffect(() => {
     thresholdRef.current = threshold;
@@ -54,6 +81,39 @@ const IndicatorApp = ({ route, navigation }) => {
   useEffect(() => {
     losReadingRef.current = losReading;
   }, [losReading]);
+
+  // update clock every second
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCurrentTime(formatTime(new Date()));
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Track screen focus state: set isFocusedRef true only when this screen is focused.
+  useEffect(() => {
+    // initialize focus state
+    try {
+      isFocusedRef.current = navigation && typeof navigation.isFocused === 'function' ? navigation.isFocused() : true;
+    } catch (e) {
+      isFocusedRef.current = true;
+    }
+
+    const onFocus = () => {
+      isFocusedRef.current = true;
+      // When returning to the screen, skip the very first incoming PPM row to avoid showing a retained/previous reading.
+      skipFirstRef.current = true;
+    };
+    const onBlur = () => { isFocusedRef.current = false; };
+
+    const focusUnsub = navigation?.addListener?.('focus', onFocus);
+    const blurUnsub = navigation?.addListener?.('blur', onBlur);
+
+    return () => {
+      if (typeof focusUnsub === 'function') focusUnsub();
+      if (typeof blurUnsub === 'function') blurUnsub();
+    };
+  }, [navigation]);
 
   // Simple helper to decide if a key/value pair represents a PPM/LOS reading.
   const isPpmKey = (key) => {
@@ -68,6 +128,17 @@ const IndicatorApp = ({ route, navigation }) => {
     if (typeof v === 'number') return v;
     const n = Number(v);
     return Number.isNaN(n) ? null : n;
+  };
+
+  // build a fingerprint string for an incoming row
+  // Prefer using any server timestamp included in the message payload (payload.ts or payload.timestamp).
+  // Fallback to the reception TIMESTAMP (local) if no server timestamp present.
+  const makeFingerprint = (serial, key, value, serverTs, localTs) => {
+    const s = serial ?? '';
+    const k = String(key ?? '');
+    const v = String(value ?? '');
+    const ts = serverTs ? String(serverTs) : String(localTs ?? '');
+    return `${s}|${k}|${v}|${ts}`;
   };
 
   // SOCKET: subscribe to MQTT forwarding and device_status events, but only push PPM rows into tableData
@@ -126,6 +197,13 @@ const IndicatorApp = ({ route, navigation }) => {
 
     // Only handle PPM entries for the live table and big indicator
     socket.on('mqtt_message', (msg) => {
+      // Only process incoming MQTT messages while this screen is focused/mounted.
+      // This prevents old/retained messages from populating the table when user isn't viewing the page.
+      if (!isFocusedRef.current) {
+        // Skip processing when the page is not focused
+        return;
+      }
+
       // msg.payload OR msg.params may contain readings
       let params = null;
       if (msg.payload && typeof msg.payload === 'object') {
@@ -142,22 +220,48 @@ const IndicatorApp = ({ route, navigation }) => {
         return;
       }
 
-      const timestamp = new Date().toLocaleString();
+      // prefer server-provided timestamp inside payload if present
+      const serverTsCandidate = (msg.payload && (msg.payload.ts || msg.payload.timestamp)) || msg.ts || msg.timestamp || '';
+
+      const localTimestamp = new Date().toLocaleString();
       const newPpmRows = [];
 
       // iterate params and only keep ppm entries
       Object.entries(params).forEach(([k, v]) => {
         if (!isPpmKey(k)) return;
+        // If skipFirstRef is true, skip the very first PPM entry encountered and clear the flag.
+        if (skipFirstRef.current) {
+          skipFirstRef.current = false;
+          // do not mark as seen, do not add to rows
+          return;
+        }
+
         const numeric = normalizePpmValue(v);
         const displayVal = numeric !== null ? numeric : v;
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-ppm`;
+
+        // build fingerprint: prefer server timestamp to protect against retained/replayed messages
+        const fp = makeFingerprint(msgSerial ?? serialNumber, k, v, serverTsCandidate, localTimestamp);
+
+        // if this fingerprint was previously cleared, ignore it
+        if (clearedSetRef.current.has(fp)) {
+          return;
+        }
+        // if we've already seen this fingerprint in-session, skip duplicates
+        if (seenSetRef.current.has(fp)) {
+          return;
+        }
+        // mark as seen
+        seenSetRef.current.add(fp);
+
         newPpmRows.push({
           id,
-          TIMESTAMP: timestamp,
+          TIMESTAMP: localTimestamp,
           INDICATOR: 'Gas Finder-PPM',
           VALUE: displayVal,
           rawKey: k,
           rawValue: v,
+          _fingerprint: fp,
         });
 
         // update big indicator
@@ -198,7 +302,7 @@ const IndicatorApp = ({ route, navigation }) => {
         // ignore
       }
     };
-  }, [serialNumber, route.params?.host, currentView]);
+  }, [serialNumber, route.params?.host, currentView, navigation]);
 
   // Fetch threshold when mounted and on focus
   useEffect(() => {
@@ -391,6 +495,8 @@ const IndicatorApp = ({ route, navigation }) => {
             <Text style={[styles.statusText, { color: connectionState.color }]}>
               {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
             </Text>
+            {/* Current time (hh:mm:ss AM/PM) displayed just below the online/offline indicator */}
+            <Text style={styles.timeText}>{currentTime}</Text>
           </View>
         </View>
 
@@ -429,7 +535,25 @@ const IndicatorApp = ({ route, navigation }) => {
 
           <TouchableOpacity
             style={styles.clearbutton}
-            onPress={() => setTableData([])}
+            onPress={() => {
+              // capture current rows' fingerprints so replays of these exact rows are ignored later
+              const currentFingerprints = new Set(
+                tableData.map(it => makeFingerprint(
+                  connectionState.serialNo ?? serialNumber,
+                  it.rawKey,
+                  it.rawValue,
+                  '', // we don't have server timestamp stored per-row, so use local TIMESTAMP part of fingerprint
+                  it.TIMESTAMP
+                ))
+              );
+              clearedSetRef.current = currentFingerprints;
+              // clear table
+              setTableData([]);
+              // ensure we skip the first incoming PPM after clearing (to avoid immediate retained replay)
+              skipFirstRef.current = true;
+              // optional: keep seenSet as-is (so duplicates already seen won't be added),
+              // do not clear seenSetRef if you want to keep dedupe for session
+            }}
           >
             <Text style={styles.cleartext}>Clear</Text>
           </TouchableOpacity>
@@ -579,6 +703,11 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 16,
     fontWeight: '700',
+  },
+  timeText: {
+    fontSize: 14,
+    color: '#ccc',
+    marginTop: 4,
   },
 
   /* Big indicator (dark style like original) */
