@@ -116,7 +116,7 @@ export default function SettingsPage({ route, navigation }) {
         throw new Error(`Save failed: ${res.status} ${typeof body === 'string' ? body : JSON.stringify(body)}`);
       }
 
-      // Call onUpdate if provided by main page so it can refresh
+      // Notify main screen via callback (if provided)
       if (typeof onUpdate === 'function') {
         try {
           onUpdate({ los_ppm: numeric === null ? null : numeric });
@@ -125,16 +125,8 @@ export default function SettingsPage({ route, navigation }) {
         }
       }
 
-      // Reset navigation stack to Main so user cannot go back to Settings.
-      // Replace 'Main' with the actual route name of your main page if different.
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Main', params: { refresh: Date.now() } }],
-      });
-
-      // Show success (optional). After reset the screen will change.
-      // Keep this Alert short; it may be dismissed quickly on navigation.
-      // Alert.alert('Success', 'LOS PPM threshold updated'); // optional
+      // IMPORTANT: per your requirement, use goBack() — do NOT reset or navigate elsewhere.
+      navigation.goBack();
     } catch (err) {
       console.error('handleSave error', err);
       Alert.alert('Save failed', String(err.message || err));
@@ -179,7 +171,7 @@ export default function SettingsPage({ route, navigation }) {
                 <TouchableOpacity
                   style={[styles.btn, styles.cancel]}
                   onPress={() => {
-                    navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+                    navigation.goBack();
                   }}
                   disabled={saving}
                 >

@@ -43,38 +43,6 @@ const IndicatorApp = ({ route, navigation }) => {
     return defaultHost;
   };
 
-  // Ping device to check status (simple http ping)
-  useEffect(() => {
-    let pingInterval = null;
-    const host = pickHost();
-    const pingPath = (protocol) => `${protocol}://${host}:3004/api/ping/${serialNumber}`;
-
-    const checkDeviceStatus = async () => {
-      if (!serialNumber) {
-        setConnectionState({ color: '#ff2323', serialNo: serialNumber });
-        return;
-      }
-
-      try {
-        const url = pingPath('http');
-        const response = await fetch(url, { method: 'GET' });
-        if (response.ok) {
-          setConnectionState({ color: '#16b800', serialNo: serialNumber });
-          return;
-        }
-        setConnectionState({ color: '#ff2323', serialNo: serialNumber });
-      } catch (err) {
-        setConnectionState({ color: '#ff2323', serialNo: serialNumber });
-      }
-    };
-
-    checkDeviceStatus();
-    pingInterval = setInterval(checkDeviceStatus, 15000);
-    return () => {
-      if (pingInterval) clearInterval(pingInterval);
-    };
-  }, [serialNumber, route.params?.host]);
-
   // Normalize incoming param keys and produce display name + formatted value
   const formatIndicator = (key, rawValue) => {
     const degree = '\u00B0';
@@ -129,7 +97,7 @@ const IndicatorApp = ({ route, navigation }) => {
     return { displayName, value };
   };
 
-  // WebSocket: receive latest readings (handles multiple params)
+  // WebSocket: receive latest readings (handles multiple params) and device ping/status updates
   useEffect(() => {
     const host = pickHost();
     const protocol = 'http';
@@ -144,6 +112,34 @@ const IndicatorApp = ({ route, navigation }) => {
     socket.on('connect', () => console.log('WebSocket connected to', socketUrl));
     socket.on('disconnect', () => console.log('WebSocket disconnected'));
 
+    // Helper to handle ping/status payload variants from server via websocket.
+    const handlePingPayload = (payload) => {
+      if (!payload) return;
+      // accept many possible keys
+      const serial = payload.serial_number ?? payload.serialNumber ?? payload.serial ?? payload.sn;
+      let online = payload.online ?? payload.isOnline ?? payload.is_online ?? payload.status ?? payload.up;
+      if (typeof online === 'string') {
+        const s = online.toLowerCase();
+        if (s === 'online' || s === 'true' || s === '1') online = true;
+        else online = false;
+      } else if (typeof online === 'number') {
+        online = online === 1;
+      } else if (typeof online !== 'boolean') {
+        online = !!online;
+      }
+      if (!serial) return;
+      if (serial === serialNumber) {
+        setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
+      }
+    };
+
+    // Common event names the backend might emit when it finishes a ping or status check
+    socket.on('device_ping', handlePingPayload);
+    socket.on('ping_result', handlePingPayload);
+    socket.on('device_status', handlePingPayload);
+    socket.on('ping', handlePingPayload);
+
+    // mqtt_message event emits sensor readings as before
     socket.on('mqtt_message', (msg) => {
       // extract params object (supporting payload.params or payload itself)
       let params = null;
@@ -152,15 +148,18 @@ const IndicatorApp = ({ route, navigation }) => {
       } else if (msg.params && typeof msg.params === 'object') {
         params = msg.params;
       }
+      // If the message itself is a ping/status emitted through mqtt_message, try to detect and handle it:
+      if (msg.type && String(msg.type).toLowerCase().includes('ping')) {
+        handlePingPayload(msg.payload || msg);
+      }
       if (!params || typeof params !== 'object') return;
 
       const timestamp = new Date().toLocaleString();
       const newRows = [];
 
-      // iterate all keys from params and map them to display names + formatted values
       Object.entries(params).forEach(([k, v]) => {
         const { displayName, value } = formatIndicator(k, v);
-        // push every mapped indicator (including PPM and others)
+
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${displayName}`;
         newRows.push({
           id,
@@ -174,7 +173,6 @@ const IndicatorApp = ({ route, navigation }) => {
         // If this is the PPM (LOS) reading, update the big indicator and color
         const keyNorm = String(k).toLowerCase();
         if ((keyNorm.includes('los') && keyNorm.includes('ppm')) || keyNorm.includes('ppm') || displayName === 'Gas Finder-PPM') {
-          // prefer numeric if available
           const numeric = (typeof v === 'number') ? v : Number(v);
           if (!Number.isNaN(numeric)) {
             setLosReading(numeric);
@@ -184,26 +182,21 @@ const IndicatorApp = ({ route, navigation }) => {
               setIndicatorColor('#16b800');
             }
           } else {
-            // if not numeric, still set the big indicator raw value as string
             setLosReading(v);
           }
         }
       });
 
       if (newRows.length > 0) {
-        // prepend new rows (newest first), and cap the list to last 1000 entries
         setTableData(prev => {
           const next = [...newRows, ...prev].slice(0, 1000);
           return next;
         });
-        // auto-scroll to top so newest rows are visible (only for live view)
         if (currentView === 'live') {
           setTimeout(() => {
             try {
               flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-            } catch (e) {
-              // ignore if scroll fails
-            }
+            } catch (e) { /* ignore */ }
           }, 50);
         }
       }
@@ -211,33 +204,57 @@ const IndicatorApp = ({ route, navigation }) => {
 
     return () => {
       try {
+        socket.off('device_ping', handlePingPayload);
+        socket.off('ping_result', handlePingPayload);
+        socket.off('device_status', handlePingPayload);
+        socket.off('ping', handlePingPayload);
+        socket.off('mqtt_message');
         socket.disconnect();
       } catch (e) {
-        console.warn('Error disconnecting socket', e);
+        console.warn('Error disconnecting socket or removing listeners', e);
       }
     };
-  }, [serialNumber, threshold, route.params?.host, currentView]);
+    // Note: intentionally not depending on threshold here to avoid reattaching socket listeners repeatedly.
+    // serialNumber and host changes will recreate the effect.
+  }, [serialNumber, route.params?.host]);
 
-  // Fetch threshold from backend (your working snippet)
+  // Fetch threshold from backend when page mounts AND whenever the screen gains focus,
+  // so returning from Settings will refresh the threshold.
   useEffect(() => {
+    if (!serialNumber) return;
+    let cancelled = false;
+    const host = pickHost();
+
     const fetchThreshold = async () => {
       try {
-        const host = pickHost();
         const response = await fetch(`http://${host}:3004/api/thresholds/${serialNumber}`);
         if (response.ok) {
           const data = await response.json();
-          setThreshold(data.los_ppm ?? null);
+          // Accept various shapes; prefer los_ppm
+          const los = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
+          if (!cancelled) setThreshold(los ?? null);
         } else {
-          setThreshold(null);
+          if (!cancelled) setThreshold(null);
         }
       } catch (error) {
         console.warn('Failed to fetch threshold:', error);
-        setThreshold(null);
+        if (!cancelled) setThreshold(null);
       }
     };
-    fetchThreshold();
-  }, [serialNumber, route.params?.host]);
 
+    // Initial fetch when component mounts
+    fetchThreshold();
+
+    // Also fetch every time the screen comes into focus (i.e. after returning from Settings)
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchThreshold();
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [serialNumber, route.params?.host, navigation]);
   // Derive alarms list: entries where indicator is Gas Finder-PPM and numeric value > threshold
   const alarms = useMemo(() => {
     if (threshold === null || threshold === undefined) return [];
@@ -341,7 +358,7 @@ const IndicatorApp = ({ route, navigation }) => {
           </View>
         </View>
 
-        {/* Big Indicator (PPM) - restored dark design like original */}
+        {/* Big Indicator (PPM) */}
         <View style={styles.singleIndicatorContainer}>
           <View style={[styles.outerBezel]}>
             <View style={styles.reflection} />
