@@ -12,7 +12,6 @@ buildscript {
     repositories {
         google()
         mavenCentral()
-        maven { url "https://jitpack.io" }
     }
 
     // Use an AGP compatible with your Gradle wrapper. Adjust if your wrapper uses a different version.
