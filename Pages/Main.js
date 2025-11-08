@@ -491,8 +491,8 @@ const IndicatorApp = ({ route, navigation }) => {
           <View style={styles.serialbox}>
             <Text style={styles.serialno}>{connectionState.serialNo || serialNumber || '-'}</Text>
           </View>
-          <View style={styles.statusBox}>
-            <Text style={[styles.statusText, { color: connectionState.color }]}>
+          <View style={styles.statusBox}> 
+            <Text style={[styles.statusText, { color: connectionState.color === '#16b800' ? '#16b800' : '#ff2323' }]}>
               {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
             </Text>
             {/* Current time (hh:mm:ss AM/PM) displayed just below the online/offline indicator */}
