@@ -52,7 +52,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
   const pickHost = () => {
     if (hostOverride) return hostOverride;
-    const defaultHost = '3.227.99.254';
+    const defaultHost = 'boreal.soniciot.com';
     if (Platform.OS === 'android') {
       return defaultHost;
     }
@@ -145,7 +145,7 @@ const IndicatorApp = ({ route, navigation }) => {
   useEffect(() => {
     if (!serialNumber) return undefined;
     const host = pickHost();
-    const socketUrl = `http://${host}:3004`;
+    const socketUrl = `https://${host}`;
     const socket = io(socketUrl, {
       reconnection: true,
       reconnectionAttempts: 5,
@@ -312,7 +312,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
     const fetchThreshold = async () => {
       try {
-        const response = await fetch(`http://${host}:3004/api/thresholds/${serialNumber}`);
+        const response = await fetch(`https://${host}/api/thresholds/${serialNumber}`);
         if (response.ok) {
           const data = await response.json();
           const losRaw = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
@@ -348,7 +348,7 @@ const IndicatorApp = ({ route, navigation }) => {
       // Also fetch device immediate ping when returning to page
       (async () => {
         try {
-          const res = await fetch(`http://${pickHost()}:3004/api/ping/${serialNumber}`);
+          const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
           if (res.ok) {
             const body = await res.json();
             const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
@@ -371,7 +371,7 @@ const IndicatorApp = ({ route, navigation }) => {
     if (!serialNumber) return;
     (async () => {
       try {
-        const res = await fetch(`http://${pickHost()}:3004/api/ping/${serialNumber}`);
+        const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
         if (res.ok) {
           const body = await res.json();
           const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);

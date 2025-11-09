@@ -17,7 +17,7 @@ export default function ChangePage() {
   const navigation = useNavigation();
 
   useEffect(() => {
-    fetch('http://3.227.99.254:3004/api/remote_stations')
+    fetch('https://boreal.soniciot.com/api/remote_stations')
       .then((response) => response.json())
       .then((data) => {
         const sortedData = data
@@ -40,7 +40,7 @@ export default function ChangePage() {
   const handleSubmit = async () => {
     try {
       const updateNamesPromises = serialNames.map(({ id, name }) =>
-        fetch(`http://3.227.99.254:3004/api/remote_stations/${id}`, {
+        fetch(`https://boreal.soniciot.com/api/remote_stations/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name }),
