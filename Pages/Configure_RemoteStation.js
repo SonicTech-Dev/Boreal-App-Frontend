@@ -58,14 +58,16 @@ export default function ChangePage() {
   return (
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
       <View style={styles.container}>
-        {/* Top row: page title (first row) */}
-        <View style={styles.pageTitleRow}>
-          <Text style={styles.pageTitle}>Configure Remote Station Name</Text>
+        {/* Top-left: logo in a curved light container */}
+        <View style={styles.logoRow}>
+          <View style={styles.logoContainer}>
+            <Image style={styles.logo} source={require('../Assets/boreal.png')} resizeMode="contain" />
+          </View>
         </View>
 
-        {/* Second row: logo centered */}
-        <View style={styles.logoRow}>
-          <Image style={styles.logo} source={require('../Assets/boreal.png')} resizeMode="contain" />
+        {/* Second row: larger heading centered */}
+        <View style={styles.headingRow}>
+          <Text style={styles.headingText}>Configure Remote Station Name</Text>
         </View>
 
         {/* Centered area: card + submit centered on screen */}
@@ -126,29 +128,19 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // Page title (first row)
-  pageTitleRow: {
-    width: '100%',
-    paddingTop: 18,
-    paddingBottom: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pageTitle: {
-    fontSize: 20,
-    color: '#fff',
-    fontWeight: '700',
-    textAlign: 'center',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
-
-  // Logo row (second row)
+  // Top-left logo row & curved container
   logoRow: {
     width: '100%',
-    paddingTop: 6,
-    paddingBottom: 12,
+    paddingTop: 18,
+    paddingHorizontal: 16,
+    alignItems: 'flex-start', // left aligned
+  },
+  logoContainer: {
+    backgroundColor: 'rgba(255,255,255,0.95)', // light background
+    padding: 8,
+    borderRadius: 14, // curved border
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -156,6 +148,21 @@ const styles = StyleSheet.create({
     width: 140,
     height: 44,
     opacity: 0.95,
+  },
+
+  // Second row: heading centered and a bit larger
+  headingRow: {
+    width: '100%',
+    paddingTop: 8,
+    paddingBottom: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headingText: {
+    fontSize: 22, // larger heading as requested
+    color: '#fff',
+    fontWeight: '800',
+    textAlign: 'center',
   },
 
   // Scroll area that centers content

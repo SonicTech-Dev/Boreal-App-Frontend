@@ -149,7 +149,9 @@ export default function SettingsPage({ route, navigation }) {
         <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
           {/* Top: logo row */}
           <View style={styles.logoRow}>
-            <Image style={styles.topLogo} source={require('../Assets/boreal.png')} resizeMode="contain" />
+            <View style={styles.logoContainer}>
+              <Image style={styles.topLogo} source={require('../Assets/boreal.png')} resizeMode="contain" />
+            </View>
           </View>
 
           {/* Second row: centered, larger heading */}
@@ -217,7 +219,18 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingTop: 18,
     paddingHorizontal: 16,
+    borderRadius: 8,
     alignItems: 'flex-start',
+  },
+  // curved container for logo at top-left
+  logoContainer: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    padding: 6,
+    borderRadius: 12, // curved border
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   topLogo: {
     width: 120,
@@ -232,7 +245,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headingText: {
-    fontSize: 22, // a little larger
+    fontSize: 26, // made a little bigger as requested
     color: '#fff',
     fontWeight: '800',
   },
