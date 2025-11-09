@@ -148,7 +148,7 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     width: '80%',
-    height: 140,
+    height: 100,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.95)',
@@ -158,7 +158,7 @@ const styles = StyleSheet.create({
   },
   borealpicContainer: {
     width: '80%',
-    height: 200,
+    height: 160,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.58)',
