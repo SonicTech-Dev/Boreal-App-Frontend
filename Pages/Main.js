@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 const { io } = require('socket.io-client');
 import Icon from 'react-native-vector-icons/Ionicons';
+import SignalDisplay from '../Components/signalDisplay';
 
 const IndicatorApp = ({ route, navigation }) => {
   const [tableData, setTableData] = useState([]); // will store only PPM rows (newest first)
@@ -491,12 +492,19 @@ const IndicatorApp = ({ route, navigation }) => {
           <View style={styles.serialbox}>
             <Text style={styles.serialno}>{connectionState.serialNo || serialNumber || '-'}</Text>
           </View>
-          <View style={styles.statusBox}> 
-            <Text style={[styles.statusText, { color: connectionState.color === '#16b800' ? '#16b800' : '#ff2323' }]}>
-              {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
-            </Text>
-            {/* Current time (hh:mm:ss AM/PM) displayed just below the online/offline indicator */}
-            <Text style={styles.timeText}>{currentTime}</Text>
+          <View style={styles.statusBox}>
+            {/* Put online/offline in a light background badge */}
+            <View style={styles.statusBadge}>
+              <Text style={[styles.statusText, { color: connectionState.color === '#16b800' ? '#16b800' : '#ff2323' }]}>
+                {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
+              </Text>
+              <Text style={styles.timeText}>{currentTime}</Text>
+            </View>
+
+            <View style={styles.statusContainer}>
+              {/* Render SignalDisplay only if the device is online */}
+              {connectionState.color === '#16b800' && <SignalDisplay serialNo={serialNumber} />}
+            </View>
           </View>
         </View>
 
@@ -688,6 +696,12 @@ const styles = StyleSheet.create({
     elevation: 5,
     paddingHorizontal: 10,
   },
+  statusContainer: {
+    alignItems: 'flex-end',
+    marginTop: '2%',
+    // small paddingRight so the SignalDisplay sits a bit more to the right side
+    paddingRight: 0,
+  },
   serialno: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -698,7 +712,23 @@ const styles = StyleSheet.create({
   },
   statusBox: {
     alignItems: 'flex-end',
-    paddingRight: 8,
+    paddingRight: 16, // increased so status+signal are nudged more to the right
+  },
+  statusBadge: {
+    backgroundColor: 'rgba(255,255,255,0.95)', // light background for online/offline text
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 8,
+    // subtle border/shadow for readability
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
   },
   statusText: {
     fontSize: 16,
@@ -706,7 +736,7 @@ const styles = StyleSheet.create({
   },
   timeText: {
     fontSize: 14,
-    color: '#ccc',
+    color: '#666',
     marginTop: 4,
   },
 
