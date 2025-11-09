@@ -493,7 +493,7 @@ const IndicatorApp = ({ route, navigation }) => {
             <Text style={styles.serialno}>{connectionState.serialNo || serialNumber || '-'}</Text>
           </View>
           <View style={styles.statusBox}>
-            {/* Put online/offline in a light background badge */}
+            {/* Put online/offline in a light background badge with fixed size */}
             <View style={styles.statusBadge}>
               <Text style={[styles.statusText, { color: connectionState.color === '#16b800' ? '#16b800' : '#ff2323' }]}>
                 {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
@@ -698,7 +698,7 @@ const styles = StyleSheet.create({
   },
   statusContainer: {
     alignItems: 'flex-end',
-    marginTop: '2%',
+    marginTop: '8%',
     // small paddingRight so the SignalDisplay sits a bit more to the right side
     paddingRight: 0,
   },
@@ -712,14 +712,16 @@ const styles = StyleSheet.create({
   },
   statusBox: {
     alignItems: 'flex-end',
-    paddingRight: 16, // increased so status+signal are nudged more to the right
+    paddingRight: 0, // increased so status+signal are nudged more to the right
   },
+  // Fixed-size badge for status + time
   statusBadge: {
+    width: 110,               // fixed width
+    height: 56,               // fixed height
     backgroundColor: 'rgba(255,255,255,0.95)', // light background for online/offline text
-    paddingHorizontal: 10,
-    paddingVertical: 6,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
     // subtle border/shadow for readability
     borderWidth: 1,
@@ -729,15 +731,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
+    paddingHorizontal: 0,     // remove flexible padding
+    paddingVertical: 0,
   },
   statusText: {
     fontSize: 16,
     fontWeight: '700',
+    marginBottom: 4,
   },
   timeText: {
     fontSize: 14,
     color: '#666',
-    marginTop: 4,
+    marginTop: 0,
   },
 
   /* Big indicator (dark style like original) */
