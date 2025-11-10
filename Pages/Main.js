@@ -60,8 +60,9 @@ const IndicatorApp = ({ route, navigation }) => {
     return defaultHost;
   };
 
-  // Helper to format time as hh:mm:ss AM/PM
+  // Helper to format time as hh:mm:ss AM/PM (client-side clock)
   const formatTime = (d) => {
+    if (!d || !(d instanceof Date)) return '-';
     let hours = d.getHours();
     const ampm = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12;
@@ -72,18 +73,10 @@ const IndicatorApp = ({ route, navigation }) => {
     return `${hh}:${mm}:${ss} ${ampm}`;
   };
 
-  // current time state (hh:mm:ss AM/PM) to show below online/offline indicator
+  // client-side clock string shown under online/offline indicator
   const [currentTime, setCurrentTime] = useState(formatTime(new Date()));
 
-  // Keep refs up to date
-  useEffect(() => {
-    thresholdRef.current = threshold;
-  }, [threshold]);
-  useEffect(() => {
-    losReadingRef.current = losReading;
-  }, [losReading]);
-
-  // update clock every second
+  // update client-side clock every second
   useEffect(() => {
     const id = setInterval(() => {
       setCurrentTime(formatTime(new Date()));
@@ -91,9 +84,35 @@ const IndicatorApp = ({ route, navigation }) => {
     return () => clearInterval(id);
   }, []);
 
+  // Format row timestamp to dd/mm/yyyy hh:mm:ss AM/PM using server-provided ISO timestamp (no client creation)
+  const formatRowDateTime = (ts) => {
+    if (!ts && ts !== 0) return '-';
+    let d;
+    if (ts instanceof Date) {
+      d = ts;
+    } else {
+      d = new Date(ts);
+      if (isNaN(d.getTime())) return String(ts);
+    }
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    let hours = d.getHours();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const hh = String(hours).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${dd}/${mm}/${yyyy} ${hh}:${mins}:${ss} ${ampm}`;
+  };
+
+  // Keep refs up to date
+  useEffect(() => { thresholdRef.current = threshold; }, [threshold]);
+  useEffect(() => { losReadingRef.current = losReading; }, [losReading]);
+
   // Track screen focus state: set isFocusedRef true only when this screen is focused.
   useEffect(() => {
-    // initialize focus state
     try {
       isFocusedRef.current = navigation && typeof navigation.isFocused === 'function' ? navigation.isFocused() : true;
     } catch (e) {
@@ -102,7 +121,6 @@ const IndicatorApp = ({ route, navigation }) => {
 
     const onFocus = () => {
       isFocusedRef.current = true;
-      // When returning to the screen, skip the very first incoming PPM row to avoid showing a retained/previous reading.
       skipFirstRef.current = true;
     };
     const onBlur = () => { isFocusedRef.current = false; };
@@ -132,8 +150,6 @@ const IndicatorApp = ({ route, navigation }) => {
   };
 
   // build a fingerprint string for an incoming row
-  // Prefer using any server timestamp included in the message payload (payload.ts or payload.timestamp).
-  // Fallback to the reception TIMESTAMP (local) if no server timestamp present.
   const makeFingerprint = (serial, key, value, serverTs, localTs) => {
     const s = serial ?? '';
     const k = String(key ?? '');
@@ -176,6 +192,7 @@ const IndicatorApp = ({ route, navigation }) => {
       }
       if (!serial) return;
       if (serial === serialNumber) {
+        // Note: we no longer set a server clock here — the small clock is client-side now.
         setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
       }
     };
@@ -184,6 +201,36 @@ const IndicatorApp = ({ route, navigation }) => {
     socket.on('device_ping', handlePingPayload);
     socket.on('ping_result', handlePingPayload);
     socket.on('ping', handlePingPayload);
+
+    // Listen for threshold updates broadcasted by the server
+    const handleThresholdUpdated = (msg) => {
+      try {
+        // msg expected shape: { serial_number, indicator, threshold }
+        const sn = msg && (msg.serial_number ?? msg.serialNumber);
+        const indicator = msg && msg.indicator;
+        const thr = msg && msg.threshold;
+        if (!sn) return;
+        if (String(sn) !== String(serialNumber)) return; // only update if for this serial
+        if (!indicator || String(indicator).toLowerCase() !== 'los_ppm') return;
+        const n = (typeof thr === 'number') ? thr : Number(thr);
+        if (Number.isNaN(n)) {
+          setThreshold(null);
+          thresholdRef.current = null;
+        } else {
+          setThreshold(n);
+          thresholdRef.current = n;
+          // recompute indicator color immediately against last reading
+          const lastLos = losReadingRef.current;
+          if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos))) {
+            setIndicatorColor(Number(lastLos) > n ? '#b10303' : '#16b800');
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    socket.on('threshold_updated', handleThresholdUpdated);
 
     // snapshot (when server sends current statuses on connect)
     socket.on('device_status_snapshot', (snapshot) => {
@@ -198,14 +245,23 @@ const IndicatorApp = ({ route, navigation }) => {
 
     // Only handle PPM entries for the live table and big indicator
     socket.on('mqtt_message', (msg) => {
-      // Only process incoming MQTT messages while this screen is focused/mounted.
-      // This prevents old/retained messages from populating the table when user isn't viewing the page.
       if (!isFocusedRef.current) {
-        // Skip processing when the page is not focused
         return;
       }
 
-      // msg.payload OR msg.params may contain readings
+      // prefer server received_at; fallback to ts numeric if present
+      let serverReceivedAt = null;
+      if (msg.received_at) {
+        const parsed = new Date(msg.received_at);
+        if (!Number.isNaN(parsed.getTime())) serverReceivedAt = parsed.toISOString();
+      } else if (typeof msg.ts !== 'undefined' && msg.ts !== null) {
+        const parsed = new Date(Number(msg.ts));
+        if (!Number.isNaN(parsed.getTime())) serverReceivedAt = parsed.toISOString();
+      }
+
+      // If no server timestamp, skip (avoid using client time)
+      if (!serverReceivedAt) return;
+
       let params = null;
       if (msg.payload && typeof msg.payload === 'object') {
         params = (msg.payload.params && typeof msg.payload.params === 'object') ? msg.payload.params : msg.payload;
@@ -214,26 +270,16 @@ const IndicatorApp = ({ route, navigation }) => {
       }
       if (!params || typeof params !== 'object') return;
 
-      // Optionally filter by serial_number in msg if provided
       const msgSerial = msg.serial_number ?? (msg.payload && (msg.payload.serial_number || msg.payload.serial)) ?? undefined;
       if (msgSerial && serialNumber && String(msgSerial) !== String(serialNumber)) {
-        // message for another device — ignore
         return;
       }
 
-      // prefer server-provided timestamp inside payload if present
-      const serverTsCandidate = (msg.payload && (msg.payload.ts || msg.payload.timestamp)) || msg.ts || msg.timestamp || '';
-
-      const localTimestamp = new Date().toLocaleString();
       const newPpmRows = [];
-
-      // iterate params and only keep ppm entries
       Object.entries(params).forEach(([k, v]) => {
         if (!isPpmKey(k)) return;
-        // If skipFirstRef is true, skip the very first PPM entry encountered and clear the flag.
         if (skipFirstRef.current) {
           skipFirstRef.current = false;
-          // do not mark as seen, do not add to rows
           return;
         }
 
@@ -241,23 +287,16 @@ const IndicatorApp = ({ route, navigation }) => {
         const displayVal = numeric !== null ? numeric : v;
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-ppm`;
 
-        // build fingerprint: prefer server timestamp to protect against retained/replayed messages
-        const fp = makeFingerprint(msgSerial ?? serialNumber, k, v, serverTsCandidate, localTimestamp);
+        const serverTsForFingerprint = (typeof msg.ts !== 'undefined' && msg.ts !== null) ? String(msg.ts) : String(serverReceivedAt);
+        const fp = makeFingerprint(msgSerial ?? serialNumber, k, v, serverTsForFingerprint, null);
 
-        // if this fingerprint was previously cleared, ignore it
-        if (clearedSetRef.current.has(fp)) {
-          return;
-        }
-        // if we've already seen this fingerprint in-session, skip duplicates
-        if (seenSetRef.current.has(fp)) {
-          return;
-        }
-        // mark as seen
+        if (clearedSetRef.current.has(fp)) return;
+        if (seenSetRef.current.has(fp)) return;
         seenSetRef.current.add(fp);
 
         newPpmRows.push({
           id,
-          TIMESTAMP: localTimestamp,
+          TIMESTAMP: serverReceivedAt, // ISO from server
           INDICATOR: 'Gas Finder-PPM',
           VALUE: displayVal,
           rawKey: k,
@@ -265,7 +304,6 @@ const IndicatorApp = ({ route, navigation }) => {
           _fingerprint: fp,
         });
 
-        // update big indicator
         if (numeric !== null) {
           setLosReading(numeric);
           const currentThreshold = thresholdRef.current;
@@ -298,12 +336,38 @@ const IndicatorApp = ({ route, navigation }) => {
         socket.off('ping', handlePingPayload);
         socket.off('device_status_snapshot');
         socket.off('mqtt_message');
+        socket.off('threshold_updated', handleThresholdUpdated);
         socket.disconnect();
       } catch (e) {
         // ignore
       }
     };
   }, [serialNumber, route.params?.host, currentView, navigation]);
+
+  // When device goes offline we want:
+  // - big indicator to become gray
+  // - the gas-finder value beside the indicator set to null
+  // - the table cleared (no rows)
+  useEffect(() => {
+    const isOnline = connectionState && connectionState.color === '#16b800';
+    if (!isOnline) {
+      setIndicatorColor('#888888');
+      setLosReading(null);
+      setTableData([]);
+      seenSetRef.current = new Set();
+      clearedSetRef.current = new Set();
+      skipFirstRef.current = true;
+    } else {
+      skipFirstRef.current = true;
+      const lastLos = losReadingRef.current;
+      const t = Number.isFinite(Number(thresholdRef.current)) ? Number(thresholdRef.current) : null;
+      if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos)) && t !== null) {
+        setIndicatorColor(Number(lastLos) > t ? '#b10303' : '#16b800');
+      } else {
+        setIndicatorColor('#16b800');
+      }
+    }
+  }, [connectionState]);
 
   // Fetch threshold when mounted and on focus
   useEffect(() => {
@@ -321,7 +385,6 @@ const IndicatorApp = ({ route, navigation }) => {
           if (!cancelled) {
             setThreshold(Number.isFinite(los) ? los : null);
             thresholdRef.current = Number.isFinite(los) ? los : null;
-            // recompute indicator color against last reading immediately
             const lastLos = losReadingRef.current;
             if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos))) {
               const t = Number.isFinite(Number(los)) ? Number(los) : null;
@@ -346,7 +409,6 @@ const IndicatorApp = ({ route, navigation }) => {
     fetchThreshold();
     const unsub = navigation.addListener('focus', () => {
       fetchThreshold();
-      // Also fetch device immediate ping when returning to page
       (async () => {
         try {
           const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
@@ -367,7 +429,7 @@ const IndicatorApp = ({ route, navigation }) => {
     };
   }, [serialNumber, route.params?.host, navigation]);
 
-  // initial ping when component mounts so status shows immediately
+  // initial ping when component mounts so status shows immediately (no server time returned here)
   useEffect(() => {
     if (!serialNumber) return;
     (async () => {
@@ -427,7 +489,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
     return (
       <View style={styles.row}>
-        <Text style={[styles.cell, styles.dateCell]}>{item.TIMESTAMP}</Text>
+        <Text style={[styles.cell, styles.dateCell]}>{formatRowDateTime(item.TIMESTAMP)}</Text>
         <Text style={[styles.cell, styles.statusCell, valueStyle]}>{displayValue}</Text>
       </View>
     );
@@ -444,7 +506,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
     return (
       <View style={styles.row}>
-        <Text style={[styles.cell, styles.dateCell]}>{item.TIMESTAMP}</Text>
+        <Text style={[styles.cell, styles.dateCell]}>{formatRowDateTime(item.TIMESTAMP)}</Text>
         <Text style={[styles.cell, styles.statusCell, valueStyle]}>{displayValue}</Text>
       </View>
     );
@@ -550,8 +612,8 @@ const IndicatorApp = ({ route, navigation }) => {
                   connectionState.serialNo ?? serialNumber,
                   it.rawKey,
                   it.rawValue,
-                  '', // we don't have server timestamp stored per-row, so use local TIMESTAMP part of fingerprint
-                  it.TIMESTAMP
+                  it.TIMESTAMP ?? '', // server timestamp stored on row
+                  null
                 ))
               );
               clearedSetRef.current = currentFingerprints;
@@ -567,7 +629,7 @@ const IndicatorApp = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Contained table (fixed size) - headers changed to Date/Time + Value */}
+        {/* Contained table (fixed size) - headers show DATE & TIME */}
         <View style={styles.box}>
           {currentView === 'live' && (
             <>
@@ -660,8 +722,8 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
   logo: {
-    width: 140,
-    height: 48,
+    width: 120,
+    height: 40,
     resizeMode: 'contain',
   },
   topSettings: {
@@ -673,7 +735,6 @@ const styles = StyleSheet.create({
   /* serial row: serial (left) and status (right) */
   serialRow: {
     width: '100%',
-    marginTop: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -717,7 +778,7 @@ const styles = StyleSheet.create({
   // Fixed-size badge for status + time
   statusBadge: {
     width: 110,               // fixed width
-    height: 56,               // fixed height
+    height: 52,               // fixed height
     backgroundColor: 'rgba(255,255,255,0.95)', // light background for online/offline text
     borderRadius: 8,
     alignItems: 'center',
@@ -748,7 +809,6 @@ const styles = StyleSheet.create({
   /* Big indicator (dark style like original) */
   singleIndicatorContainer: {
     alignItems: 'center',
-    marginVertical: 18,
   },
   outerBezel: {
     width: 90,
@@ -865,7 +925,7 @@ const styles = StyleSheet.create({
   },
   tablebox: {
     width: '98%',
-    height: '30%', // fixed height for contained table
+    height: '28%', // fixed height for contained table
     backgroundColor: 'rgba(255,255,255,0.9)',
     borderRadius: 5,
     marginTop: 5,

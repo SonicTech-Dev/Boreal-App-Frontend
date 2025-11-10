@@ -234,8 +234,8 @@ const styles = StyleSheet.create({
   },
   topLogo: {
     width: 120,
-    height: 44,
-    opacity: 0.95,
+    height: 40,
+    resizeMode: 'contain',
   },
   headingRow: {
     width: '100%',

@@ -37,8 +37,8 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   if (Platform.OS === 'android') {
     PushNotification.localNotification({
       channelId: 'default-channel-id', // Ensure this matches the created channel
-      title: remoteMessage.notification?.title || 'Default Title',
-      message: remoteMessage.notification?.body || 'Default Message',
+      title: remoteMessage.notification?.title ,
+      message: remoteMessage.notification?.body,
       playSound: true,
       soundName: 'default',
       vibrate: true,
@@ -50,8 +50,8 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   // ✅ iOS: Show popup for background messages
   if (Platform.OS === 'ios') {
     PushNotificationIOS.presentLocalNotification({
-      alertTitle: remoteMessage.notification?.title || 'Default Title',
-      alertBody: remoteMessage.notification?.body || 'Default Message',
+      alertTitle: remoteMessage.notification?.title,
+      alertBody: remoteMessage.notification?.body,
     });
   }
 });

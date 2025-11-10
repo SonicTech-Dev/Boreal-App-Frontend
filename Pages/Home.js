@@ -89,8 +89,8 @@ const styles = StyleSheet.create({
         shadowColor: '#000',
     },
     logo: {
-        width: 320,
-        height: 250,
+        width: "70%",
+        height: "70%",
         resizeMode: 'contain',
     },
     borealpic: {

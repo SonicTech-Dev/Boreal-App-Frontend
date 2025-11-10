@@ -174,8 +174,8 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
   },
   logo: {
-    width: 250,
-    height: 120,
+    width: "60%",
+    height: "60%",
     resizeMode: 'contain',
   },
   borealpic: {
