@@ -696,7 +696,7 @@ const styles = StyleSheet.create({
   /* serial row: serial (left) and status (right) */
   serialRow: {
     width: '100%',
-    marginTop: 10,
+    marginTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -721,7 +721,7 @@ const styles = StyleSheet.create({
   },
   statusContainer: {
     alignItems: 'flex-end',
-    marginTop: '8%',
+    marginTop: '2%',
     // small paddingRight so the SignalDisplay sits a bit more to the right side
     paddingRight: 0,
   },
@@ -771,7 +771,7 @@ const styles = StyleSheet.create({
   /* Big indicator (dark style like original) */
   singleIndicatorContainer: {
     alignItems: 'center',
-    marginVertical: 18,
+    marginVertical: 10,
   },
   outerBezel: {
     width: 90,
