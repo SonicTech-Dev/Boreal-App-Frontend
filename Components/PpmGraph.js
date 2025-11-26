@@ -13,8 +13,12 @@ import Svg, { Text as SvgText, Rect } from 'react-native-svg';
 /**
  * PpmGraph - light theme only, axis titles static & always visible
  *
- * Fix: ensure X (Time) title is visible by giving the container enough height
- * and allowing overflow so the bottom title isn't clipped.
+ * Changes:
+ * - Y axis numeric tick labels are hidden when there is no data.
+ * - They appear only when the graph has data (visibleValues.length > 0).
+ *
+ * Usage:
+ *  <PpmGraph externalData={graphData} />
  */
 
 const DEFAULT_FLUSH_MS = 200; // ms
@@ -133,6 +137,9 @@ const PpmGraph = forwardRef(({
     return timesAll.slice(timesAll.length - renderPoints);
   }, [timesAll, renderPoints]);
 
+  // whether we have real data to show
+  const hasData = visibleValues.length > 0;
+
   // Chart sizing with cap & adaptive spacing
   const viewportWidth = Math.max(320, Dimensions.get('window').width - 32);
   const desiredWidth = Math.max(viewportWidth, Math.max(1, visibleValues.length) * pointSpacing + 40);
@@ -158,16 +165,18 @@ const PpmGraph = forwardRef(({
   }, [visibleTimes, maxXLabels, showAllTimestamps]);
 
   // Chart data for visible points
+  // keep a safe fallback dataset ([0]) so the chart doesn't crash when empty,
+  // but we will hide Y-axis labels when hasData is false.
   const chartData = useMemo(() => ({
-    labels: new Array(visibleValues.length).fill(''),
+    labels: new Array(Math.max(1, visibleValues.length)).fill(''),
     datasets: [
       {
-        data: visibleValues.length > 0 ? visibleValues : [0],
+        data: hasData ? visibleValues : [0],
         color: (opacity = 1) => `rgba(37,99,235,${opacity})`, // blue
         strokeWidth: 2,
       },
     ],
-  }), [visibleValues]);
+  }), [visibleValues, hasData]);
 
   // Light theme defaults (no conditional logic)
   const lightChartConfig = useMemo(() => ({
@@ -323,9 +332,10 @@ const PpmGraph = forwardRef(({
             fromZero={true}
             segments={4}
             renderDotContent={renderDotContent}
-            withDots={visibleValues.length > 0}
+            withDots={hasData}
+            // hide Y-axis tick labels when there is no data
             formatXLabel={() => ''}
-            formatYLabel={(y) => `${y}`}
+            formatYLabel={hasData ? (y => `${y}`) : (() => '')}
           />
         </View>
       </ScrollView>
