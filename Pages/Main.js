@@ -14,6 +14,7 @@ import {
 const { io } = require('socket.io-client');
 import Icon from 'react-native-vector-icons/Ionicons';
 import SignalDisplay from '../Components/signalDisplay';
+import PpmGraph from '../Components/PpmGraph'; // <-- import the graph component
 
 const IndicatorApp = ({ route, navigation }) => {
   const [tableData, setTableData] = useState([]); // will store only PPM rows (newest first)
@@ -22,10 +23,11 @@ const IndicatorApp = ({ route, navigation }) => {
 
   // color indicates device ping status (green/red)
   const [connectionState, setConnectionState] = useState({ color: '#ff2323', serialNo: null });
-  const [currentView, setCurrentView] = useState('live'); // 'live' | 'alarms'
+  const [currentView, setCurrentView] = useState('live'); // 'live' | 'alarms' | 'graph'
   const flatListRef = useRef(null);
+  const graphRef = useRef(null); // ref for graph to call clear()
   const serialNumber = route.params?.serialNumber;
-  const hostOverride = route.params?.host; // optional: allow overriding host from navigation params
+  const hostOverride = route.params?.host; // optional
   const [activeButton, setActiveButton] = useState('live');
 
   // The big indicator will reflect the most recent PPM (LOS) reading
@@ -106,7 +108,7 @@ const IndicatorApp = ({ route, navigation }) => {
     losReadingRef.current = losReading;
   }, [losReading]);
 
-  // Track screen focus state: set isFocusedRef true only when this screen is focused.
+  // Track screen focus state
   useEffect(() => {
     try {
       isFocusedRef.current = navigation && typeof navigation.isFocused === 'function' ? navigation.isFocused() : true;
@@ -126,14 +128,12 @@ const IndicatorApp = ({ route, navigation }) => {
     };
   }, [navigation]);
 
-  // Simple helper to decide if a key/value pair represents a PPM/LOS reading.
   const isPpmKey = (key) => {
     if (!key) return false;
     const k = String(key).toLowerCase();
     return k.includes('ppm') || (k.includes('los') && k.includes('ppm')) || k === 'ppm' || k.includes('ppmvalue');
   };
 
-  // Format display value for PPM (we store numeric if possible)
   const normalizePpmValue = (v) => {
     if (v === null || v === undefined) return null;
     if (typeof v === 'number') return v;
@@ -141,7 +141,7 @@ const IndicatorApp = ({ route, navigation }) => {
     return Number.isNaN(n) ? null : n;
   };
 
-  // SOCKET: subscribe to MQTT forwarding and device_status events, but only push PPM rows into tableData
+  // SOCKET: same as before, populate tableData (PPM rows) and update indicator.
   useEffect(() => {
     if (!serialNumber) return undefined;
     const host = pickHost();
@@ -154,13 +154,12 @@ const IndicatorApp = ({ route, navigation }) => {
     });
 
     socket.on('connect', () => {
-      console.log('WebSocket connected to', socketUrl);
+      // console.log('WebSocket connected to', socketUrl);
     });
     socket.on('disconnect', () => {
-      console.log('WebSocket disconnected');
+      // console.log('WebSocket disconnected');
     });
 
-    // device status events
     const handlePingPayload = (payload) => {
       if (!payload) return;
       const serial = payload.serial_number ?? payload.serialNumber ?? payload.serial ?? payload.sn;
@@ -174,7 +173,7 @@ const IndicatorApp = ({ route, navigation }) => {
         online = !!online;
       }
       if (!serial) return;
-      if (serial === serialNumber) {
+      if (String(serial) === String(serialNumber)) {
         setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
       }
     };
@@ -184,15 +183,13 @@ const IndicatorApp = ({ route, navigation }) => {
     socket.on('ping_result', handlePingPayload);
     socket.on('ping', handlePingPayload);
 
-    // Listen for threshold updates broadcasted by the server
     const handleThresholdUpdated = (msg) => {
       try {
-        // msg expected shape: { serial_number, indicator, threshold }
         const sn = msg && (msg.serial_number ?? msg.serialNumber);
         const indicator = msg && msg.indicator;
         const thr = msg && msg.threshold;
         if (!sn) return;
-        if (String(sn) !== String(serialNumber)) return; // only update if for this serial
+        if (String(sn) !== String(serialNumber)) return;
         if (!indicator || String(indicator).toLowerCase() !== 'los_ppm') return;
         const n = (typeof thr === 'number') ? thr : Number(thr);
         if (Number.isNaN(n)) {
@@ -201,37 +198,28 @@ const IndicatorApp = ({ route, navigation }) => {
         } else {
           setThreshold(n);
           thresholdRef.current = n;
-          // recompute indicator color immediately against last reading
           const lastLos = losReadingRef.current;
           if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos))) {
             setIndicatorColor(Number(lastLos) > n ? '#b10303' : '#16b800');
           }
         }
         setTableData([]);
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
     };
 
     socket.on('threshold_updated', handleThresholdUpdated);
 
-    // snapshot (when server sends current statuses on connect)
     socket.on('device_status_snapshot', (snapshot) => {
       try {
         if (!Array.isArray(snapshot)) return;
         const match = snapshot.find(s => s.serial_number === serialNumber);
         if (match) handlePingPayload(match);
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
     });
 
-    // Only handle PPM entries for the live table and big indicator
     socket.on('mqtt_message', (msg) => {
-      // Only process incoming MQTT messages while this screen is focused/mounted.
       if (!isFocusedRef.current) return;
 
-      // prefer server received_at; fallback to ts numeric if present
       let serverReceivedAt = null;
       if (msg.received_at) {
         const parsed = new Date(msg.received_at);
@@ -240,11 +228,8 @@ const IndicatorApp = ({ route, navigation }) => {
         const parsed = new Date(Number(msg.ts));
         if (!Number.isNaN(parsed.getTime())) serverReceivedAt = parsed.toISOString();
       }
-
-      // If no server timestamp, skip (avoid using client time for rows)
       if (!serverReceivedAt) return;
 
-      // continue only if payload params exist
       let params = null;
       if (msg.payload && typeof msg.payload === 'object') {
         params = (msg.payload.params && typeof msg.payload.params === 'object') ? msg.payload.params : msg.payload;
@@ -253,15 +238,10 @@ const IndicatorApp = ({ route, navigation }) => {
       }
       if (!params || typeof params !== 'object') return;
 
-      // Optionally filter by serial_number in msg if provided
       const msgSerial = msg.serial_number ?? (msg.payload && (msg.payload.serial_number || msg.payload.serial)) ?? undefined;
-      if (msgSerial && serialNumber && String(msgSerial) !== String(serialNumber)) {
-        // message for another device — ignore
-        return;
-      }
+      if (msgSerial && serialNumber && String(msgSerial) !== String(serialNumber)) return;
 
       const newPpmRows = [];
-      // iterate params and only keep ppm entries
       Object.entries(params).forEach(([k, v]) => {
         if (!isPpmKey(k)) return;
 
@@ -269,7 +249,6 @@ const IndicatorApp = ({ route, navigation }) => {
         const displayVal = numeric !== null ? numeric : v;
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-ppm`;
 
-        // build entry using serverReceivedAt as canonical timestamp
         newPpmRows.push({
           id,
           TIMESTAMP: serverReceivedAt,
@@ -279,7 +258,6 @@ const IndicatorApp = ({ route, navigation }) => {
           rawValue: v,
         });
 
-        // update big indicator
         if (numeric !== null) {
           setLosReading(numeric);
           const currentThreshold = thresholdRef.current;
@@ -298,11 +276,43 @@ const IndicatorApp = ({ route, navigation }) => {
 
         if (currentView === 'live') {
           setTimeout(() => {
-            try { flatListRef.current?.scrollToOffset({ offset: 0, animated: true }); } catch (e) { /* ignore */ }
+            try { flatListRef.current?.scrollToOffset({ offset: 0, animated: true }); } catch (e) {}
           }, 50);
         }
       }
     });
+
+    // initial ping fetch
+    (async () => {
+      try {
+        const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
+        if (res.ok) {
+          const body = await res.json();
+          const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
+          setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
+        }
+      } catch (e) {}
+    })();
+
+    // threshold fetch
+    (async () => {
+      try {
+        const response = await fetch(`https://${pickHost()}/api/thresholds/${serialNumber}`);
+        if (response.ok) {
+          const data = await response.json();
+          const losRaw = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
+          const los = losRaw === null || losRaw === undefined ? null : Number(losRaw);
+          setThreshold(Number.isFinite(los) ? los : null);
+          thresholdRef.current = Number.isFinite(los) ? los : null;
+        } else {
+          setThreshold(null);
+          thresholdRef.current = null;
+        }
+      } catch (err) {
+        setThreshold(null);
+        thresholdRef.current = null;
+      }
+    })();
 
     return () => {
       try {
@@ -314,25 +324,18 @@ const IndicatorApp = ({ route, navigation }) => {
         socket.off('mqtt_message');
         socket.off('threshold_updated', handleThresholdUpdated);
         socket.disconnect();
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
     };
   }, [serialNumber, route.params?.host, currentView, navigation]);
 
-  // When device goes offline we want:
-  // - big indicator to become gray
-  // - the gas-finder value beside the indicator set to null
-  // - the table cleared (no rows)
+  // When device goes offline: clear table & indicator
   useEffect(() => {
     const isOnline = connectionState && connectionState.color === '#16b800';
     if (!isOnline) {
       setIndicatorColor('#888888');
       setLosReading(null);
       setTableData([]);
-      // don't maintain dedupe sets anymore (dedupe removed)
     } else {
-      // became online: just ensure indicator color recomputed from threshold/last reading
       const lastLos = losReadingRef.current;
       const t = Number.isFinite(Number(thresholdRef.current)) ? Number(thresholdRef.current) : null;
       if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos)) && t !== null) {
@@ -343,103 +346,7 @@ const IndicatorApp = ({ route, navigation }) => {
     }
   }, [connectionState]);
 
-  // Fetch threshold when mounted and on focus
-  useEffect(() => {
-    if (!serialNumber) return;
-    let cancelled = false;
-    const host = pickHost();
-
-    const fetchThreshold = async () => {
-      try {
-        const response = await fetch(`https://${host}/api/thresholds/${serialNumber}`);
-        if (response.ok) {
-          const data = await response.json();
-          const losRaw = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
-          const los = losRaw === null || losRaw === undefined ? null : Number(losRaw);
-          if (!cancelled) {
-            setThreshold(Number.isFinite(los) ? los : null);
-            thresholdRef.current = Number.isFinite(los) ? los : null;
-            // recompute indicator color against last reading immediately
-            const lastLos = losReadingRef.current;
-            if (lastLos !== null && lastLos !== undefined && !Number.isNaN(Number(lastLos))) {
-              const t = Number.isFinite(Number(los)) ? Number(los) : null;
-              setIndicatorColor(t !== null && Number(lastLos) > t ? '#b10303' : '#16b800');
-            }
-          }
-        } else {
-          if (!cancelled) {
-            setThreshold(null);
-            thresholdRef.current = null;
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to fetch threshold:', err);
-        if (!cancelled) {
-          setThreshold(null);
-          thresholdRef.current = null;
-        }
-      }
-    };
-
-    fetchThreshold();
-    const unsub = navigation.addListener('focus', () => {
-      fetchThreshold();
-      // Also fetch device immediate ping when returning to page
-      (async () => {
-        try {
-          const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
-          if (res.ok) {
-            const body = await res.json();
-            const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
-            setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
-          }
-        } catch (e) {
-          // ignore
-        }
-      })();
-    });
-
-    return () => {
-      cancelled = true;
-      if (typeof unsub === 'function') unsub();
-    };
-  }, [serialNumber, route.params?.host, navigation]);
-
-  // initial ping when component mounts so status shows immediately (no server time returned here)
-  useEffect(() => {
-    if (!serialNumber) return;
-    (async () => {
-      try {
-        const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
-        if (res.ok) {
-          const body = await res.json();
-          const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
-          setConnectionState({ color: online ? '#16b800' : '#ff2323', serialNo: serialNumber });
-        }
-      } catch (e) {
-        console.warn('initial ping failed', e);
-      }
-    })();
-  }, [serialNumber, route.params?.host]);
-
-  // Recompute indicator color when threshold or last LOS reading changes.
-  useEffect(() => {
-    if (losReading === null || losReading === undefined) return;
-    const numeric = (typeof losReading === 'number') ? losReading : Number(losReading);
-    if (Number.isNaN(numeric)) return;
-    if (threshold === null || threshold === undefined) {
-      setIndicatorColor('#16b800'); // default green if no threshold
-      return;
-    }
-    const t = Number(threshold);
-    if (Number.isNaN(t)) {
-      setIndicatorColor('#16b800');
-      return;
-    }
-    setIndicatorColor(numeric > t ? '#b10303' : '#16b800');
-  }, [threshold, losReading]);
-
-  // Derive alarms list from tableData (tableData now only contains PPM rows)
+  // Derive alarms list from tableData
   const alarms = useMemo(() => {
     if (threshold === null || threshold === undefined) return [];
     return tableData.filter((row) => {
@@ -453,7 +360,7 @@ const IndicatorApp = ({ route, navigation }) => {
     }).slice(0, 1000);
   }, [tableData, threshold]);
 
-  // Render only Date & Time + PPM value for both Live (Real time) and Alarms
+  // Render row functions (unchanged)
   const renderRow = ({ item }) => {
     const rawVal = item.rawValue;
     const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
@@ -505,17 +412,28 @@ const IndicatorApp = ({ route, navigation }) => {
     );
   }
 
-  // Helper to style tab buttons
   const tabStyle = (name) => (activeButton === name ? styles.tabActive : styles.tabInactive);
   const tabTextStyle = (name) => (activeButton === name ? styles.tabTextActive : styles.tabTextInactive);
 
-  // For the live view we use tableData (PPM rows). For alarms use alarms.
-  const liveData = tableData;
+  // Graph data MUST be oldest -> newest. tableData is newest -> oldest.
+  const graphData = useMemo(() => {
+    return tableData.slice().reverse().map(item => {
+      const raw = item.rawValue ?? item.VALUE;
+      const value = (typeof raw === 'number') ? raw : (Number(raw) || (raw === 0 ? 0 : (Number.isNaN(Number(raw)) ? null : Number(raw))));
+      return { ts: item.TIMESTAMP, value };
+    });
+  }, [tableData]);
+
+  // Clear handler: clears table and graph
+  const handleClearAll = () => {
+    setTableData([]);
+    try { graphRef.current?.clear(); } catch (e) {}
+  };
 
   return (
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
       <SafeAreaView style={styles.container}>
-        {/* Logo (top-left) and Settings (top-right) */}
+        {/* Top Row */}
         <View style={styles.topRow}>
           <View style={styles.logoContainer}>
             <Image style={styles.logo} source={require('../Assets/logo.png')} resizeMode="contain" />
@@ -525,13 +443,12 @@ const IndicatorApp = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Serial number (left) and online/offline (right) in same row */}
+        {/* Serial + Status */}
         <View style={styles.serialRow}>
           <View style={styles.serialbox}>
             <Text style={styles.serialno}>{connectionState.serialNo || serialNumber || '-'}</Text>
           </View>
           <View style={styles.statusBox}>
-            {/* Put online/offline in a light background badge with fixed size */}
             <View style={styles.statusBadge}>
               <Text style={[styles.statusText, { color: connectionState.color === '#16b800' ? '#16b800' : '#ff2323' }]}>
                 {connectionState.color === '#16b800' ? 'ONLINE' : 'OFFLINE'}
@@ -540,13 +457,12 @@ const IndicatorApp = ({ route, navigation }) => {
             </View>
 
             <View style={styles.statusContainer}>
-              {/* Render SignalDisplay only if the device is online */}
               {connectionState.color === '#16b800' && <SignalDisplay serialNo={serialNumber} />}
             </View>
           </View>
         </View>
 
-        {/* Big Indicator (PPM) */}
+        {/* Big Indicator */}
         <View style={styles.singleIndicatorContainer}>
           <View style={[styles.outerBezel]}>
             <View style={styles.reflection} />
@@ -580,17 +496,22 @@ const IndicatorApp = ({ route, navigation }) => {
           </TouchableOpacity>
 
           <TouchableOpacity
+            style={[styles.logs, tabStyle('graph')]}
+            onPressIn={() => { setActiveButton('graph'); }}
+            onPress={() => { setCurrentView('graph'); setActiveButton('graph'); }}
+          >
+            <Text style={[styles.buttonText, tabTextStyle('graph')]}>Graph</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={styles.clearbutton}
-            onPress={() => {
-              // clear table
-              setTableData([]);
-            }}
+            onPress={handleClearAll}
           >
             <Text style={styles.cleartext}>Clear</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Contained table (fixed size) - headers show DATE & TIME */}
+        {/* Content area */}
         <View style={styles.box}>
           {currentView === 'live' && (
             <>
@@ -601,7 +522,7 @@ const IndicatorApp = ({ route, navigation }) => {
               <FlatList
                 ref={flatListRef}
                 style={styles.tablebox}
-                data={liveData}
+                data={tableData}
                 renderItem={renderRow}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.body}
@@ -648,15 +569,32 @@ const IndicatorApp = ({ route, navigation }) => {
               )}
             </>
           )}
+
+          {currentView === 'graph' && (
+            <>
+              {/* Render only the graph component (it expects oldest->newest data) */}
+              <View style={{ width: '100%',marginTop: 10}}>
+                <PpmGraph
+                  ref={graphRef}
+                  externalData={graphData}
+                  renderPoints={80}
+                  pointSpacing={64}
+                  maxXLabels={7}
+                  height={300}
+                />
+              </View>
+            </>
+          )}
         </View>
 
-        {/* Powered by at bottom */}
+        {/* Powered by */}
         <Text style={styles.powered}>Powered by SONIC</Text>
       </SafeAreaView>
     </ImageBackground>
   );
 };
 
+// (retain the same styles below — unchanged)
 const styles = StyleSheet.create({
   background: { flex: 1, width: '100%', height: '100%' },
   container: {
@@ -665,7 +603,6 @@ const styles = StyleSheet.create({
     padding: 20,
   },
 
-  /* top row contains logo (left) and settings (right) */
   topRow: {
     width: '100%',
     flexDirection: 'row',
@@ -693,14 +630,11 @@ const styles = StyleSheet.create({
     padding: 6,
   },
 
-  /* serial row: serial (left) and status (right) */
   serialRow: {
     width: '100%',
-    marginTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 6,
     marginBottom: 6,
   },
   serialbox: {
@@ -722,7 +656,6 @@ const styles = StyleSheet.create({
   statusContainer: {
     alignItems: 'flex-end',
     marginTop: '2%',
-    // small paddingRight so the SignalDisplay sits a bit more to the right side
     paddingRight: 0,
   },
   serialno: {
@@ -735,18 +668,16 @@ const styles = StyleSheet.create({
   },
   statusBox: {
     alignItems: 'flex-end',
-    paddingRight: 0, // increased so status+signal are nudged more to the right
+    paddingRight: 0,
   },
-  // Fixed-size badge for status + time
   statusBadge: {
-    width: 110,               // fixed width
-    height: 56,               // fixed height
-    backgroundColor: 'rgba(255,255,255,0.95)', // light background for online/offline text
+    width: 110,
+    height: 56,
+    backgroundColor: 'rgba(255,255,255,0.95)',
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 8,
-    // subtle border/shadow for readability
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.06)',
     shadowColor: '#000',
@@ -754,7 +685,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
-    paddingHorizontal: 0,     // remove flexible padding
+    paddingHorizontal: 0,
     paddingVertical: 0,
   },
   statusText: {
@@ -768,7 +699,6 @@ const styles = StyleSheet.create({
     marginTop: 0,
   },
 
-  /* Big indicator (dark style like original) */
   singleIndicatorContainer: {
     alignItems: 'center',
     marginVertical: 10,
@@ -820,7 +750,6 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
 
-  /* tabs */
   switchbuttons: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -828,7 +757,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   logs: {
-    width: 110,
+    width: 90,
     height: 40,
     borderRadius: 6,
     paddingVertical: 8,
@@ -869,7 +798,6 @@ const styles = StyleSheet.create({
     color: 'white',
   },
 
-  /* contained table: fixed width & height, light shaded as requested */
   box: {
     width: '100%',
     alignItems: 'center',
@@ -888,7 +816,7 @@ const styles = StyleSheet.create({
   },
   tablebox: {
     width: '98%',
-    height: '30%', // fixed height for contained table
+    height: '30%',
     backgroundColor: 'rgba(255,255,255,0.9)',
     borderRadius: 5,
     marginTop: 5,
