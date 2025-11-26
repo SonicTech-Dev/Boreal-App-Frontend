@@ -6,49 +6,71 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions, Text } from 'react-native';
+import { View, StyleSheet, ScrollView, useWindowDimensions, Text } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import Svg, { Text as SvgText, Rect } from 'react-native-svg';
 
 /**
  * PpmGraph - light theme only, axis titles static & always visible
  *
- * Changes:
- * - Y axis numeric tick labels are hidden when there is no data.
- * - They appear only when the graph has data (visibleValues.length > 0).
- *
- * Usage:
- *  <PpmGraph externalData={graphData} />
+ * Responsive sizing fixes: responsiveHeight now scales up and down with screen width.
  */
 
 const DEFAULT_FLUSH_MS = 200; // ms
 const MAX_CANVAS_WIDTH = 4800; // px
-const DEFAULT_Y_AXIS_WIDTH = 40; // space reserved on left for rotated Y title
-const DEFAULT_LABEL_AREA_HEIGHT = 56; // space under chart for x-axis title / labels
+const DEFAULT_Y_AXIS_WIDTH = 40; // base space reserved on left for rotated Y title
+const DEFAULT_LABEL_AREA_HEIGHT = 56; // base space under chart for x-axis title / labels
+const BASE_SCREEN_WIDTH = 375; // design reference width for scaling
 
 const PpmGraph = forwardRef(({
   externalData = null,
   maxPoints = 1000,
   renderPoints = 80,
   pointSpacing = 64,
-  maxXLabels = 7, // unused when showAllTimestamps=true
+  maxXLabels = 7,
   height = 340,
   topPadding = 50,
   chartConfig: userChartConfig,
   style,
   flushMs = DEFAULT_FLUSH_MS,
   showAllTimestamps = true,
-  containerColor = '#ffffff', // light background
+  containerColor = '#ffffff',
   // axis title props
   xAxisTitle = 'Time',
   yAxisTitle = 'PPM',
   showAxisTitles = true,
   axisTitleFontSize = 12,
   axisTitleColor = '#0b1a1f',
-  // optional sizing overrides
+  // optional sizing overrides (base values; will be scaled)
   yAxisWidth = DEFAULT_Y_AXIS_WIDTH,
   labelAreaHeight = DEFAULT_LABEL_AREA_HEIGHT,
 }, ref) => {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  // scale factor based on current width relative to a base width
+  const widthScale = Math.max(0.6, Math.min(1.6, windowWidth / BASE_SCREEN_WIDTH));
+
+  // responsive computed sizes (you can still override the base props)
+  const responsiveHeight = useMemo(() => {
+    // keep chart height reasonable on very small/very large screens
+    const minH = 160;
+    const maxH = Math.max(280, Math.round(windowHeight * 0.45)); // cap on very tall devices
+
+    // Allow scaling both down and up using widthScale (previous bug clamped to <=1)
+    const scaled = Math.round(height * widthScale);
+
+    return Math.max(minH, Math.min(maxH, scaled));
+  }, [height, windowHeight, widthScale]);
+
+  const effectivePointSpacing = useMemo(() => {
+    // scale horizontal spacing with width, clamp to a min
+    return Math.max(12, Math.round(pointSpacing * widthScale));
+  }, [pointSpacing, widthScale]);
+
+  const effectiveYAxisWidth = useMemo(() => Math.max(28, Math.round(yAxisWidth * widthScale)), [yAxisWidth, widthScale]);
+  const effectiveLabelAreaHeight = useMemo(() => Math.max(36, Math.round(labelAreaHeight * widthScale)), [labelAreaHeight, widthScale]);
+  const effectiveAxisTitleFontSize = Math.max(10, Math.round(axisTitleFontSize * widthScale));
+
   const [timesAll, setTimesAll] = useState([]); // HH:MM:SS strings
   const [valuesAll, setValuesAll] = useState([]); // numeric or null
 
@@ -137,17 +159,15 @@ const PpmGraph = forwardRef(({
     return timesAll.slice(timesAll.length - renderPoints);
   }, [timesAll, renderPoints]);
 
-  // whether we have real data to show
   const hasData = visibleValues.length > 0;
 
-  // Chart sizing with cap & adaptive spacing
-  const viewportWidth = Math.max(320, Dimensions.get('window').width - 32);
-  const desiredWidth = Math.max(viewportWidth, Math.max(1, visibleValues.length) * pointSpacing + 40);
+  // Chart sizing with cap & adaptive spacing (responsive)
+  const viewportWidth = Math.max(320, Math.round(windowWidth - 32));
+  const desiredWidth = Math.max(viewportWidth, Math.max(1, visibleValues.length) * effectivePointSpacing + 40);
   let chartInnerWidth = Math.min(desiredWidth, MAX_CANVAS_WIDTH);
-  let effectivePointSpacing = pointSpacing;
   if (desiredWidth > MAX_CANVAS_WIDTH && visibleValues.length > 0) {
-    effectivePointSpacing = Math.max(12, Math.floor((MAX_CANVAS_WIDTH - 40) / visibleValues.length));
-    chartInnerWidth = Math.max(viewportWidth, visibleValues.length * effectivePointSpacing + 40);
+    const spacing = Math.max(12, Math.floor((MAX_CANVAS_WIDTH - 40) / Math.max(1, visibleValues.length)));
+    chartInnerWidth = Math.max(viewportWidth, visibleValues.length * spacing + 40);
   }
 
   // Indices to show timestamps: if showAllTimestamps true -> all indices
@@ -165,14 +185,12 @@ const PpmGraph = forwardRef(({
   }, [visibleTimes, maxXLabels, showAllTimestamps]);
 
   // Chart data for visible points
-  // keep a safe fallback dataset ([0]) so the chart doesn't crash when empty,
-  // but we will hide Y-axis labels when hasData is false.
   const chartData = useMemo(() => ({
     labels: new Array(Math.max(1, visibleValues.length)).fill(''),
     datasets: [
       {
         data: hasData ? visibleValues : [0],
-        color: (opacity = 1) => `rgba(37,99,235,${opacity})`, // blue
+        color: (opacity = 1) => `rgba(37,99,235,${opacity})`,
         strokeWidth: 2,
       },
     ],
@@ -183,7 +201,7 @@ const PpmGraph = forwardRef(({
     backgroundGradientFrom: '#ffffff',
     backgroundGradientTo: '#f3f7fb',
     decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(11,26,31,${opacity})`, // main label color (dark)
+    color: (opacity = 1) => `rgba(11,26,31,${opacity})`,
     labelColor: (opacity = 1) => `rgba(80,95,102,${Math.max(0.5, opacity)})`,
     propsForDots: { r: '4', strokeWidth: '2', stroke: '#ffffff', fill: '#2563eb' },
     style: { borderRadius: 12 },
@@ -192,7 +210,7 @@ const PpmGraph = forwardRef(({
 
   const chartConfig = userChartConfig ? { ...lightChartConfig, ...userChartConfig } : lightChartConfig;
 
-  // render labels above/below each dot. Reduced sizing when many visible points.
+  // render labels above/below each dot. Responsive font sizing and widths.
   const renderDotContent = ({ x, y, index }) => {
     const v = visibleValues[index];
     const t = visibleTimes[index];
@@ -200,21 +218,26 @@ const PpmGraph = forwardRef(({
 
     const showTime = showTimeIndices.includes(index);
     const n = visibleValues.length;
+
+    // base sizes, then scale with widthScale
     let labelWidth = 86;
     let fontSizeTime = 10;
     let fontSizePpm = 11;
     if (n > 120) { labelWidth = 56; fontSizeTime = 8; fontSizePpm = 9; }
     else if (n > 80) { labelWidth = 64; fontSizeTime = 9; fontSizePpm = 10; }
 
-    const pad = 4;
-    const rectW = labelWidth + pad * 2;
-    const rectH = 18;
+    const scaledLabelWidth = Math.max(40, Math.round(labelWidth * widthScale));
+    const scaledFontSizeTime = Math.max(8, Math.round(fontSizeTime * widthScale));
+    const scaledFontSizePpm = Math.max(9, Math.round(fontSizePpm * widthScale));
 
-    const ppmY = y - 14;
-    const timeY = y + 28;
+    const pad = Math.max(3, Math.round(4 * widthScale));
+    const rectW = scaledLabelWidth + pad * 2;
+    const rectH = Math.max(14, Math.round(18 * widthScale));
 
-    // Light theme colors (fixed)
-    const rectFill = 'rgba(0,0,0,0.55)'; // dark semi-transparent bubble
+    const ppmY = y - Math.max(12, Math.round(14 * widthScale));
+    const timeY = y + Math.max(22, Math.round(28 * widthScale));
+
+    const rectFill = 'rgba(0,0,0,0.55)';
     const ppmTextColor = '#ffffff';
     const timeTextColor = '#ffffff';
 
@@ -234,7 +257,7 @@ const PpmGraph = forwardRef(({
               x={x}
               y={ppmY - 2}
               fill={ppmTextColor}
-              fontSize={fontSizePpm}
+              fontSize={scaledFontSizePpm}
               fontWeight="700"
               textAnchor="middle"
             >
@@ -255,9 +278,9 @@ const PpmGraph = forwardRef(({
             />
             <SvgText
               x={x}
-              y={timeY + (fontSizeTime / 2) + 2}
+              y={timeY + (scaledFontSizeTime / 2) + 2}
               fill={timeTextColor}
-              fontSize={fontSizeTime}
+              fontSize={scaledFontSizeTime}
               textAnchor="middle"
             >
               {t}
@@ -269,13 +292,13 @@ const PpmGraph = forwardRef(({
   };
 
   // Total wrapper height used to help center Y title vertically
-  const wrapperHeight = height + labelAreaHeight;
+  const wrapperHeight = responsiveHeight + effectiveLabelAreaHeight;
 
   return (
     <View
       style={[
         styles.container,
-        { backgroundColor: containerColor, minHeight: topPadding + height + labelAreaHeight },
+        { backgroundColor: containerColor, minHeight: topPadding + responsiveHeight + effectiveLabelAreaHeight },
         style,
       ]}
     >
@@ -285,9 +308,9 @@ const PpmGraph = forwardRef(({
           style={{
             position: 'absolute',
             left: 6,
-            top: topPadding + (wrapperHeight - topPadding - labelAreaHeight) / 2,
-            height: height,
-            width: yAxisWidth,
+            top: topPadding + (wrapperHeight - topPadding - effectiveLabelAreaHeight) / 2,
+            height: responsiveHeight,
+            width: effectiveYAxisWidth,
             alignItems: 'center',
             justifyContent: 'center',
             pointerEvents: 'none',
@@ -299,7 +322,7 @@ const PpmGraph = forwardRef(({
               transform: [{ rotate: '-90deg' }],
               color: axisTitleColor,
               fontWeight: '600',
-              fontSize: axisTitleFontSize,
+              fontSize: effectiveAxisTitleFontSize,
             }}
           >
             {yAxisTitle}
@@ -314,26 +337,30 @@ const PpmGraph = forwardRef(({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{
           // reserve left space for Y axis title so chart doesn't overlap it
-          width: chartInnerWidth + yAxisWidth,
+          width: chartInnerWidth + effectiveYAxisWidth,
           paddingRight: 12,
-          paddingLeft: yAxisWidth,
+          paddingLeft: effectiveYAxisWidth,
         }}
       >
-        <View style={{ width: chartInnerWidth, height: height + labelAreaHeight }}>
+        <View style={{ width: chartInnerWidth, height: responsiveHeight + effectiveLabelAreaHeight }}>
           <LineChart
             data={chartData}
             width={chartInnerWidth}
-            height={height}
+            height={responsiveHeight}
             chartConfig={chartConfig}
             bezier
-            style={{ borderRadius: 12, marginBottom: 0, paddingBottom: labelAreaHeight, paddingTop: topPadding }}
+            style={{
+              borderRadius: 12,
+              marginBottom: 0,
+              paddingBottom: effectiveLabelAreaHeight,
+              paddingTop: topPadding,
+            }}
             withInnerLines={true}
             withOuterLines={false}
             fromZero={true}
             segments={4}
             renderDotContent={renderDotContent}
             withDots={hasData}
-            // hide Y-axis tick labels when there is no data
             formatXLabel={() => ''}
             formatYLabel={hasData ? (y => `${y}`) : (() => '')}
           />
@@ -346,9 +373,9 @@ const PpmGraph = forwardRef(({
           style={{
             position: 'absolute',
             left: 0,
-            top: topPadding + height,
+            top: topPadding + responsiveHeight,
             width: '100%',
-            height: labelAreaHeight,
+            height: effectiveLabelAreaHeight,
             alignItems: 'center',
             justifyContent: 'center',
             pointerEvents: 'none',
@@ -359,7 +386,7 @@ const PpmGraph = forwardRef(({
             style={{
               color: axisTitleColor,
               fontWeight: '600',
-              fontSize: axisTitleFontSize,
+              fontSize: effectiveAxisTitleFontSize,
             }}
           >
             {xAxisTitle}
@@ -396,6 +423,6 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     borderRadius: 12,
-    overflow: 'visible', // allow bottom title to be visible
+    overflow: 'visible',
   },
 });

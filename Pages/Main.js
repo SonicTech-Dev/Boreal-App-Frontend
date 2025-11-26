@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Platform,
   ImageBackground,
+  useWindowDimensions,
 } from 'react-native';
 const { io } = require('socket.io-client');
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -430,6 +431,34 @@ const IndicatorApp = ({ route, navigation }) => {
     try { graphRef.current?.clear(); } catch (e) {}
   };
 
+  // ---------------------------
+  // Responsive sizing for graph
+  // ---------------------------
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  const graphHeight = useMemo(() => {
+    const minH = 140;
+    const maxH = Math.round(windowHeight * 0.4); // at most half the screen height
+    // default: about one third of screen height
+    const desired = Math.round(windowHeight * 0.25);
+    return Math.max(minH, Math.min(maxH, desired));
+  }, [windowHeight]);
+
+  const graphPointSpacing = useMemo(() => {
+    const base = 48; // base point spacing for reference screens
+    const scaled = Math.round(base * (windowWidth / 375)); // 375 = reference width
+    return Math.max(12, Math.min(80, scaled));
+  }, [windowWidth]);
+
+  const graphRenderPoints = useMemo(() => {
+    // choose number of points so the visible width isn't too crowded on small screens
+    const approx = Math.max(20, Math.floor(windowWidth / Math.max(20, Math.round(graphPointSpacing))));
+    return Math.min(120, Math.max(24, approx));
+  }, [windowWidth, graphPointSpacing]);
+
+  // ---------------------------
+  // UI
+  // ---------------------------
   return (
     <ImageBackground source={require('../Assets/bg2.png')} style={styles.background} resizeMode="cover">
       <SafeAreaView style={styles.container}>
@@ -573,14 +602,21 @@ const IndicatorApp = ({ route, navigation }) => {
           {currentView === 'graph' && (
             <>
               {/* Render only the graph component (it expects oldest->newest data) */}
-              <View style={{ width: '100%',marginTop: 10}}>
+              <View
+                style={{
+                  width: '100%',
+                  marginTop: 10,
+                  // reserve vertical space: graph + label area (~56) + small buffer
+                  height: graphHeight + 56 + 12,
+                }}
+              >
                 <PpmGraph
                   ref={graphRef}
                   externalData={graphData}
-                  renderPoints={80}
-                  pointSpacing={64}
+                  renderPoints={graphRenderPoints}
+                  pointSpacing={graphPointSpacing}
                   maxXLabels={7}
-                  height={300}
+                  height={graphHeight}
                 />
               </View>
             </>
@@ -594,7 +630,7 @@ const IndicatorApp = ({ route, navigation }) => {
   );
 };
 
-// (retain the same styles below — unchanged)
+// (retain the same styles below — with small modification to allow the box to grow)
 const styles = StyleSheet.create({
   background: { flex: 1, width: '100%', height: '100%' },
   container: {
@@ -757,7 +793,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   logs: {
-    width: 90,
+    width: 80,
     height: 40,
     borderRadius: 6,
     paddingVertical: 8,
@@ -804,7 +840,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderRadius: 10,
     marginTop: 6,
-    flex: 0,
+    // allow the box to size according to its children (graph wrapper provides explicit height)
+    flexGrow: 0,
   },
   header: {
     flexDirection: 'row',
@@ -884,7 +921,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.8)',
   },
   buttonText: {
-    fontSize: 15,
+    fontSize: 11,
     color: '#fff',
   },
 });
