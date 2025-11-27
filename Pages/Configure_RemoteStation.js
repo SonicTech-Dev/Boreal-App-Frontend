@@ -17,7 +17,7 @@ export default function ChangePage() {
   const navigation = useNavigation();
 
   useEffect(() => {
-    fetch('https://boreal.soniciot.com/api/remote_stations')
+    fetch('http://3.227.99.254:3006/api/remote_stations')
       .then((response) => response.json())
       .then((data) => {
         const sortedData = data

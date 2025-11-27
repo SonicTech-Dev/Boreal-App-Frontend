@@ -11,12 +11,22 @@ import { LineChart } from 'react-native-chart-kit';
 import Svg, { Text as SvgText, Rect } from 'react-native-svg';
 
 /**
- * PpmGraph - light theme only, axis titles static & always visible
+ * PpmGraph - updated
  *
- * Responsive sizing fixes: responsiveHeight now scales up and down with screen width.
+ * Changes made to meet your requests:
+ * - Render values exactly as they come from the backend (no extra buffering/batching).
+ *   The previous buffered flush interval could cause small bursts of multiple points being flushed at once.
+ *   Now increments from externalData are applied immediately (synchronously) to the internal arrays.
+ * - Values displayed on the chart and the popup labels use 2 decimal places (toFixed(2)),
+ *   matching how the table renders values.
+ * - chartConfig decimalPlaces set to 2 so library labels (if any) show two decimals.
+ * - Minor performance considerations preserved (functional state updates, slicing to maxPoints).
+ *
+ * Note: If you still want to throttle updates to reduce re-renders on very high-frequency input,
+ * you can reintroduce a small buffer/flush but with a much smaller timeout (eg 50ms) or use requestAnimationFrame.
  */
 
-const DEFAULT_FLUSH_MS = 200; // ms
+const DEFAULT_FLUSH_MS = 200; // retained but not used by default; immediate apply is used instead
 const MAX_CANVAS_WIDTH = 4800; // px
 const DEFAULT_Y_AXIS_WIDTH = 40; // base space reserved on left for rotated Y title
 const DEFAULT_LABEL_AREA_HEIGHT = 56; // base space under chart for x-axis title / labels
@@ -32,7 +42,7 @@ const PpmGraph = forwardRef(({
   topPadding = 50,
   chartConfig: userChartConfig,
   style,
-  flushMs = DEFAULT_FLUSH_MS,
+  flushMs = DEFAULT_FLUSH_MS, // kept for backward compatibility but default behaviour is immediate
   showAllTimestamps = true,
   containerColor = '#ffffff',
   // axis title props
@@ -52,21 +62,13 @@ const PpmGraph = forwardRef(({
 
   // responsive computed sizes (you can still override the base props)
   const responsiveHeight = useMemo(() => {
-    // keep chart height reasonable on very small/very large screens
     const minH = 160;
-    const maxH = Math.max(280, Math.round(windowHeight * 0.45)); // cap on very tall devices
-
-    // Allow scaling both down and up using widthScale (previous bug clamped to <=1)
+    const maxH = Math.max(280, Math.round(windowHeight * 0.45));
     const scaled = Math.round(height * widthScale);
-
     return Math.max(minH, Math.min(maxH, scaled));
   }, [height, windowHeight, widthScale]);
 
-  const effectivePointSpacing = useMemo(() => {
-    // scale horizontal spacing with width, clamp to a min
-    return Math.max(12, Math.round(pointSpacing * widthScale));
-  }, [pointSpacing, widthScale]);
-
+  const effectivePointSpacing = useMemo(() => Math.max(12, Math.round(pointSpacing * widthScale)), [pointSpacing, widthScale]);
   const effectiveYAxisWidth = useMemo(() => Math.max(28, Math.round(yAxisWidth * widthScale)), [yAxisWidth, widthScale]);
   const effectiveLabelAreaHeight = useMemo(() => Math.max(36, Math.round(labelAreaHeight * widthScale)), [labelAreaHeight, widthScale]);
   const effectiveAxisTitleFontSize = Math.max(10, Math.round(axisTitleFontSize * widthScale));
@@ -74,15 +76,12 @@ const PpmGraph = forwardRef(({
   const [timesAll, setTimesAll] = useState([]); // HH:MM:SS strings
   const [valuesAll, setValuesAll] = useState([]); // numeric or null
 
-  const bufferTimesRef = useRef([]);
-  const bufferValuesRef = useRef([]);
+  // track last processed externalData length to append deltas
   const lastExternalLenRef = useRef(0);
   const scrollRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     clear: () => {
-      bufferTimesRef.current = [];
-      bufferValuesRef.current = [];
       lastExternalLenRef.current = 0;
       setTimesAll([]);
       setValuesAll([]);
@@ -90,63 +89,52 @@ const PpmGraph = forwardRef(({
     },
   }), []);
 
-  // Process externalData deltas into ephemeral buffers
+  // Process externalData deltas immediately (no periodic buffer flush)
   useEffect(() => {
     if (!externalData || !Array.isArray(externalData)) return;
     const extLen = externalData.length;
     const lastLen = lastExternalLenRef.current;
 
-    // replace if shrunk
+    // If data shrank (reset/new dataset), replace content entirely
     if (extLen < lastLen) {
       const mapped = externalData.slice(-maxPoints).map(d => mapDatumToPoint(d));
       const times = mapped.map(m => formatSmallTime(m.ts));
       const values = mapped.map(m => m.value);
-      bufferTimesRef.current = [];
-      bufferValuesRef.current = [];
       lastExternalLenRef.current = extLen;
       setTimesAll(times);
       setValuesAll(values);
+      // scroll to end so latest values visible
+      setTimeout(() => { try { scrollRef.current?.scrollToEnd?.({ animated: false }); } catch (e) {} }, 0);
       return;
     }
 
     if (extLen === lastLen) return;
 
-    // append delta
+    // append the delta items immediately
     const added = externalData.slice(lastLen);
     lastExternalLenRef.current = extLen;
-    for (let i = 0; i < added.length; i++) {
-      const p = mapDatumToPoint(added[i]);
-      bufferTimesRef.current.push(formatSmallTime(p.ts));
-      bufferValuesRef.current.push(p.value);
-    }
+
+    if (added.length === 0) return;
+
+    const mapped = added.map(d => mapDatumToPoint(d));
+    const times = mapped.map(m => formatSmallTime(m.ts));
+    const values = mapped.map(m => m.value);
+
+    // Functional updates to avoid stale state issues and keep performance reasonable
+    setValuesAll(prevVals => {
+      const next = [...prevVals, ...values];
+      if (next.length > maxPoints) return next.slice(next.length - maxPoints);
+      return next;
+    });
+    setTimesAll(prevTimes => {
+      const next = [...prevTimes, ...times];
+      if (next.length > maxPoints) return next.slice(next.length - maxPoints);
+      return next;
+    });
+
+    // ensure the scroll follows new data immediately
+    setTimeout(() => { try { scrollRef.current?.scrollToEnd?.({ animated: true }); } catch (e) {} }, 0);
   }, [externalData, maxPoints]);
-
-  // Flush buffered points to state periodically
-  useEffect(() => {
-    const id = setInterval(() => {
-      const bt = bufferTimesRef.current;
-      const bv = bufferValuesRef.current;
-      if (bt.length === 0 && bv.length === 0) return;
-
-      setValuesAll(prevVals => {
-        const next = [...prevVals, ...bv];
-        if (next.length > maxPoints) return next.slice(next.length - maxPoints);
-        return next;
-      });
-      setTimesAll(prevTimes => {
-        const next = [...prevTimes, ...bt];
-        if (next.length > maxPoints) return next.slice(next.length - maxPoints);
-        return next;
-      });
-
-      bufferTimesRef.current = [];
-      bufferValuesRef.current = [];
-
-      try { scrollRef.current?.scrollToEnd?.({ animated: true }); } catch (e) {}
-    }, flushMs);
-
-    return () => clearInterval(id);
-  }, [flushMs, maxPoints]);
 
   // Visible arrays (last renderPoints)
   const visibleValues = useMemo(() => {
@@ -170,7 +158,7 @@ const PpmGraph = forwardRef(({
     chartInnerWidth = Math.max(viewportWidth, visibleValues.length * spacing + 40);
   }
 
-  // Indices to show timestamps: if showAllTimestamps true -> all indices
+  // Indices to show timestamps
   const showTimeIndices = useMemo(() => {
     const n = visibleTimes.length;
     if (n === 0) return [];
@@ -189,18 +177,18 @@ const PpmGraph = forwardRef(({
     labels: new Array(Math.max(1, visibleValues.length)).fill(''),
     datasets: [
       {
-        data: hasData ? visibleValues : [0],
+        data: hasData ? visibleValues.map(v => (v === null ? 0 : v)) : [0],
         color: (opacity = 1) => `rgba(37,99,235,${opacity})`,
         strokeWidth: 2,
       },
     ],
   }), [visibleValues, hasData]);
 
-  // Light theme defaults (no conditional logic)
+  // Light theme defaults with decimalPlaces = 2
   const lightChartConfig = useMemo(() => ({
     backgroundGradientFrom: '#ffffff',
     backgroundGradientTo: '#f3f7fb',
-    decimalPlaces: 0,
+    decimalPlaces: 2,
     color: (opacity = 1) => `rgba(11,26,31,${opacity})`,
     labelColor: (opacity = 1) => `rgba(80,95,102,${Math.max(0.5, opacity)})`,
     propsForDots: { r: '4', strokeWidth: '2', stroke: '#ffffff', fill: '#2563eb' },
@@ -241,9 +229,12 @@ const PpmGraph = forwardRef(({
     const ppmTextColor = '#ffffff';
     const timeTextColor = '#ffffff';
 
+    // Use two-decimal formatting for ppm value (match table)
+    const ppmLabel = (v === null || typeof v === 'undefined' || Number.isNaN(Number(v))) ? '-' : Number(v).toFixed(2);
+
     return (
       <Svg key={`label-${index}`} style={{ position: 'absolute', left: 0, top: 0 }}>
-        {typeof v !== 'undefined' && v !== null && (
+        {v !== undefined && v !== null && (
           <>
             <Rect
               x={x - rectW / 2}
@@ -261,7 +252,7 @@ const PpmGraph = forwardRef(({
               fontWeight="700"
               textAnchor="middle"
             >
-              {Math.round(Number(v)) + ' PPM'}
+              {`${ppmLabel} PPM`}
             </SvgText>
           </>
         )}
@@ -414,7 +405,20 @@ function mapDatumToPoint(d) {
   if (!d) return { ts: null, value: null };
   const ts = d.ts ?? d.TIMESTAMP ?? null;
   const raw = (typeof d.value !== 'undefined') ? d.value : (d.rawValue ?? d.VALUE ?? null);
-  const value = (raw === null || raw === undefined) ? null : (typeof raw === 'number' ? raw : (Number(raw) || (raw === 0 ? 0 : (Number.isNaN(Number(raw)) ? null : Number(raw)))));
+
+  // Keep numeric conversion simple and robust:
+  // If raw is numeric already, use it. If it's a string that can convert to number, use Number(raw).
+  // If empty or not a number, use null.
+  let value = null;
+  if (raw === null || raw === undefined) {
+    value = null;
+  } else if (typeof raw === 'number') {
+    value = raw;
+  } else {
+    const parsed = Number(raw);
+    value = Number.isNaN(parsed) ? null : parsed;
+  }
+
   return { ts, value };
 }
 

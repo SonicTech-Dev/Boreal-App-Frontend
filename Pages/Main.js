@@ -22,6 +22,10 @@ const IndicatorApp = ({ route, navigation }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Graph external data (oldest -> newest). Parent maintains this and appends points one-by-one.
+  const [graphExternalData, setGraphExternalData] = useState([]);
+  const GRAPH_MAX_POINTS = 1000;
+
   // color indicates device ping status (green/red)
   const [connectionState, setConnectionState] = useState({ color: '#ff2323', serialNo: null });
   const [currentView, setCurrentView] = useState('live'); // 'live' | 'alarms' | 'graph'
@@ -145,8 +149,8 @@ const IndicatorApp = ({ route, navigation }) => {
   // SOCKET: same as before, populate tableData (PPM rows) and update indicator.
   useEffect(() => {
     if (!serialNumber) return undefined;
-    const host = pickHost();
-    const socketUrl = `https://${host}`;
+    const host = '3.227.99.254:3006';
+    const socketUrl = `http://${host}`;
     const socket = io(socketUrl, {
       reconnection: true,
       reconnectionAttempts: 5,
@@ -204,7 +208,9 @@ const IndicatorApp = ({ route, navigation }) => {
             setIndicatorColor(Number(lastLos) > n ? '#b10303' : '#16b800');
           }
         }
+        // clear table and graph on threshold update so UI refreshes
         setTableData([]);
+        setGraphExternalData([]);
       } catch (e) {}
     };
 
@@ -218,6 +224,7 @@ const IndicatorApp = ({ route, navigation }) => {
       } catch (e) {}
     });
 
+    // ---- MQTT message handling (parent) ----
     socket.on('mqtt_message', (msg) => {
       if (!isFocusedRef.current) return;
 
@@ -231,47 +238,88 @@ const IndicatorApp = ({ route, navigation }) => {
       }
       if (!serverReceivedAt) return;
 
+      // Extract params object if present
       let params = null;
       if (msg.payload && typeof msg.payload === 'object') {
         params = (msg.payload.params && typeof msg.payload.params === 'object') ? msg.payload.params : msg.payload;
       } else if (msg.params && typeof msg.params === 'object') {
         params = msg.params;
       }
-      if (!params || typeof params !== 'object') return;
+      if (!params || typeof params !== 'object') params = {};
 
       const msgSerial = msg.serial_number ?? (msg.payload && (msg.payload.serial_number || msg.payload.serial)) ?? undefined;
       if (msgSerial && serialNumber && String(msgSerial) !== String(serialNumber)) return;
 
       const newPpmRows = [];
-      Object.entries(params).forEach(([k, v]) => {
-        if (!isPpmKey(k)) return;
 
-        const numeric = normalizePpmValue(v);
-        const displayVal = numeric !== null ? numeric : v;
+      // First: prefer merged PPM sent inside msg.los.los_ppm (server-side merged value).
+      const mergedPpmRaw = msg.los && (typeof msg.los.los_ppm !== 'undefined') ? msg.los.los_ppm : undefined;
+      const mergedPpm = normalizePpmValue(mergedPpmRaw);
+
+      if (mergedPpm !== null) {
+        // Use single merged value (prevents double-rendering of int/dec parts)
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-ppm`;
-
         newPpmRows.push({
           id,
           TIMESTAMP: serverReceivedAt,
           INDICATOR: 'Gas Finder-PPM',
-          VALUE: displayVal,
-          rawKey: k,
-          rawValue: v,
+          VALUE: mergedPpm,
+          rawKey: 'los_ppm_merged',
+          rawValue: mergedPpmRaw,
         });
 
-        if (numeric !== null) {
-          setLosReading(numeric);
-          const currentThreshold = thresholdRef.current;
-          const t = Number.isFinite(Number(currentThreshold)) ? Number(currentThreshold) : null;
-          setIndicatorColor(t !== null && numeric > t ? '#b10303' : '#16b800');
-        } else {
-          setLosReading(v);
-        }
-      });
+        // update big indicator
+        setLosReading(mergedPpm);
+        const currentThreshold = thresholdRef.current;
+        const t = Number.isFinite(Number(currentThreshold)) ? Number(currentThreshold) : null;
+        setIndicatorColor(t !== null && mergedPpm > t ? '#b10303' : '#16b800');
+
+        // Append single point to graph (oldest->newest)
+        const point = { ts: serverReceivedAt, value: mergedPpm };
+        setGraphExternalData(prev => {
+          const next = [...prev, point];
+          return next.length > GRAPH_MAX_POINTS ? next.slice(next.length - GRAPH_MAX_POINTS) : next;
+        });
+      } else {
+        // Fallback: scan params keys for ppm keys (legacy). This may produce multiple keys if device sends multiple ppm-like fields.
+        Object.entries(params).forEach(([k, v]) => {
+          if (!isPpmKey(k)) return;
+
+          const numeric = normalizePpmValue(v);
+          const displayVal = numeric !== null ? numeric : v;
+          const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-ppm`;
+
+          newPpmRows.push({
+            id,
+            TIMESTAMP: serverReceivedAt,
+            INDICATOR: 'Gas Finder-PPM',
+            VALUE: displayVal,
+            rawKey: k,
+            rawValue: v,
+          });
+
+          if (numeric !== null) {
+            setLosReading(numeric);
+            const currentThreshold = thresholdRef.current;
+            const t = Number.isFinite(Number(currentThreshold)) ? Number(currentThreshold) : null;
+            setIndicatorColor(t !== null && numeric > t ? '#b10303' : '#16b800');
+
+            // Append numeric point to graph
+            const point = { ts: serverReceivedAt, value: numeric };
+            setGraphExternalData(prev => {
+              const next = [...prev, point];
+              return next.length > GRAPH_MAX_POINTS ? next.slice(next.length - GRAPH_MAX_POINTS) : next;
+            });
+          } else {
+            setLosReading(v);
+          }
+        });
+      }
 
       if (newPpmRows.length > 0) {
+        // Prepend to table (newest-first)
         setTableData(prev => {
-          const next = [...newPpmRows, ...prev].slice(0, 1000);
+          const next = [...newPpmRows, ...prev].slice(0, GRAPH_MAX_POINTS);
           return next;
         });
 
@@ -286,7 +334,7 @@ const IndicatorApp = ({ route, navigation }) => {
     // initial ping fetch
     (async () => {
       try {
-        const res = await fetch(`https://${pickHost()}/api/ping/${serialNumber}`);
+        const res = await fetch(`http://3.227.99.254:3006/api/ping/${serialNumber}`);
         if (res.ok) {
           const body = await res.json();
           const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
@@ -298,7 +346,7 @@ const IndicatorApp = ({ route, navigation }) => {
     // threshold fetch
     (async () => {
       try {
-        const response = await fetch(`https://${pickHost()}/api/thresholds/${serialNumber}`);
+        const response = await fetch(`http://3.227.99.254:3006/api/thresholds/${serialNumber}`);
         if (response.ok) {
           const data = await response.json();
           const losRaw = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
@@ -329,13 +377,14 @@ const IndicatorApp = ({ route, navigation }) => {
     };
   }, [serialNumber, route.params?.host, currentView, navigation]);
 
-  // When device goes offline: clear table & indicator
+  // When device goes offline: clear table & indicator & graph
   useEffect(() => {
     const isOnline = connectionState && connectionState.color === '#16b800';
     if (!isOnline) {
       setIndicatorColor('#888888');
       setLosReading(null);
       setTableData([]);
+      setGraphExternalData([]);
     } else {
       const lastLos = losReadingRef.current;
       const t = Number.isFinite(Number(thresholdRef.current)) ? Number(thresholdRef.current) : null;
@@ -361,11 +410,11 @@ const IndicatorApp = ({ route, navigation }) => {
     }).slice(0, 1000);
   }, [tableData, threshold]);
 
-  // Render row functions (unchanged)
+  // Render row functions (updated to show two decimals)
   const renderRow = ({ item }) => {
     const rawVal = item.rawValue;
     const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
-    const displayValue = !Number.isNaN(numeric) ? `${numeric} PPM` : String(item.VALUE);
+    const displayValue = !Number.isNaN(numeric) ? `${numeric.toFixed(2)} PPM` : String(item.VALUE);
 
     const valueStyle = (threshold !== null && !Number.isNaN(numeric) && numeric > threshold)
       ? { color: '#b10303', fontWeight: '700' }
@@ -382,7 +431,7 @@ const IndicatorApp = ({ route, navigation }) => {
   const renderAlarmRow = ({ item }) => {
     const rawVal = item.rawValue;
     const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
-    const displayValue = !Number.isNaN(numeric) ? `${numeric} PPM` : String(item.VALUE);
+    const displayValue = !Number.isNaN(numeric) ? `${numeric.toFixed(2)} PPM` : String(item.VALUE);
 
     const valueStyle = (threshold !== null && !Number.isNaN(numeric) && numeric > threshold)
       ? { color: '#b10303', fontWeight: '700' }
@@ -416,45 +465,31 @@ const IndicatorApp = ({ route, navigation }) => {
   const tabStyle = (name) => (activeButton === name ? styles.tabActive : styles.tabInactive);
   const tabTextStyle = (name) => (activeButton === name ? styles.tabTextActive : styles.tabTextInactive);
 
-  // Graph data MUST be oldest -> newest. tableData is newest -> oldest.
-  const graphData = useMemo(() => {
-    return tableData.slice().reverse().map(item => {
-      const raw = item.rawValue ?? item.VALUE;
-      const value = (typeof raw === 'number') ? raw : (Number(raw) || (raw === 0 ? 0 : (Number.isNaN(Number(raw)) ? null : Number(raw))));
-      return { ts: item.TIMESTAMP, value };
-    });
-  }, [tableData]);
-
-  // Clear handler: clears table and graph
-  const handleClearAll = () => {
-    setTableData([]);
-    try { graphRef.current?.clear(); } catch (e) {}
-  };
-
-  // ---------------------------
-  // Responsive sizing for graph
-  // ---------------------------
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-
+  // Graph uses graphExternalData (oldest -> newest). We still derive some props for PpmGraph.
+  const { width: windowWidth } = useWindowDimensions();
   const graphHeight = useMemo(() => {
     const minH = 140;
-    const maxH = Math.round(windowHeight * 0.4); // at most half the screen height
-    // default: about one third of screen height
-    const desired = Math.round(windowHeight * 0.25);
-    return Math.max(minH, Math.min(maxH, desired));
-  }, [windowHeight]);
+    const desired = Math.round((windowWidth || 375) * 0.5);
+    return Math.max(minH, desired);
+  }, [windowWidth]);
 
   const graphPointSpacing = useMemo(() => {
-    const base = 48; // base point spacing for reference screens
-    const scaled = Math.round(base * (windowWidth / 375)); // 375 = reference width
+    const base = 48;
+    const scaled = Math.round(base * (windowWidth / 375));
     return Math.max(12, Math.min(80, scaled));
   }, [windowWidth]);
 
   const graphRenderPoints = useMemo(() => {
-    // choose number of points so the visible width isn't too crowded on small screens
     const approx = Math.max(20, Math.floor(windowWidth / Math.max(20, Math.round(graphPointSpacing))));
     return Math.min(120, Math.max(24, approx));
   }, [windowWidth, graphPointSpacing]);
+
+  // Clear handler: clears table and graph
+  const handleClearAll = () => {
+    setTableData([]);
+    setGraphExternalData([]);
+    try { graphRef.current?.clear(); } catch (e) {}
+  };
 
   // ---------------------------
   // UI
@@ -502,7 +537,7 @@ const IndicatorApp = ({ route, navigation }) => {
           </View>
           <Text style={{ color: 'white', fontSize: 20, marginTop: 10 }}>{indicatorBigLabel}</Text>
           <Text style={{ color: indicatorColor, fontSize: 36, fontWeight: 'bold' }}>
-            {losReading !== null ? (typeof losReading === 'number' ? Math.round(losReading) : String(losReading)) : '-'}
+            {losReading !== null ? (Number.isFinite(Number(losReading)) ? Number(losReading).toFixed(2) : String(losReading)) : '-'}
           </Text>
         </View>
 
@@ -612,7 +647,7 @@ const IndicatorApp = ({ route, navigation }) => {
               >
                 <PpmGraph
                   ref={graphRef}
-                  externalData={graphData}
+                  externalData={graphExternalData}
                   renderPoints={graphRenderPoints}
                   pointSpacing={graphPointSpacing}
                   maxXLabels={7}

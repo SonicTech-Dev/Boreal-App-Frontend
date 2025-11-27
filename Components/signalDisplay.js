@@ -7,7 +7,7 @@ const SignalDisplay = ({ serialNo }) => {
   const [isMatching, setIsMatching] = useState(false);
 
   useEffect(() => {
-    const socket = io('https://boreal.soniciot.com'); // Replace with your server address
+    const socket = io('http://3.227.99.254:3006'); // Replace with your server address
 
     socket.on('signal', (message) => {
       try {

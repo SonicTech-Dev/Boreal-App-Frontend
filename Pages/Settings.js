@@ -22,8 +22,8 @@ export default function SettingsPage({ route, navigation }) {
   const [saving, setSaving] = useState(false);
 
   // Static backend host
-  const HOST_IP = 'boreal.soniciot.com';
-  const BASE = `https://${HOST_IP}`;
+  const HOST_IP = '3.227.99.254:3006';
+  const BASE = `http://${HOST_IP}`;
 
   useEffect(() => {
     if (!serialNumber) return;
