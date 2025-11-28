@@ -8,29 +8,29 @@ import React, {
 } from 'react';
 import { View, StyleSheet, ScrollView, useWindowDimensions, Text } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
-import Svg, { Text as SvgText, Rect } from 'react-native-svg';
+import Svg, { Text as SvgText } from 'react-native-svg';
 
 /**
- * PpmGraph - updated
+ * PpmGraph - supports gap on the side where new data appears (newestOnLeft)
  *
- * Changes made to meet your requests:
- * - Render values exactly as they come from the backend (no extra buffering/batching).
- *   The previous buffered flush interval could cause small bursts of multiple points being flushed at once.
- *   Now increments from externalData are applied immediately (synchronously) to the internal arrays.
- * - Values displayed on the chart and the popup labels use 2 decimal places (toFixed(2)),
- *   matching how the table renders values.
- * - chartConfig decimalPlaces set to 2 so library labels (if any) show two decimals.
- * - Minor performance considerations preserved (functional state updates, slicing to maxPoints).
+ * Additions:
+ * - Prop newestOnLeft (default false). If true, newest points are shown on the left
+ *   (we reverse visible data for plotting) and the visual gap is placed on the left side.
+ *   If false (default) newest is on the right and the gap is placed on the right.
+ * - The chartData and labels are built from plottedValues/plottedTimes which are reversed
+ *   when newestOnLeft is true.
+ * - Scroll behavior: when new data arrive, if newestOnLeft is false we scrollToEnd,
+ *   otherwise we scrollTo({ x: 0 }) so newest is visible on the left with the gap.
+ * - Trailing/leading gap logic adjusted based on newestOnLeft.
  *
- * Note: If you still want to throttle updates to reduce re-renders on very high-frequency input,
- * you can reintroduce a small buffer/flush but with a much smaller timeout (eg 50ms) or use requestAnimationFrame.
+ * Usage:
+ * <PpmGraph externalData={data} newestOnLeft={true} ... />
  */
 
-const DEFAULT_FLUSH_MS = 200; // retained but not used by default; immediate apply is used instead
-const MAX_CANVAS_WIDTH = 4800; // px
-const DEFAULT_Y_AXIS_WIDTH = 40; // base space reserved on left for rotated Y title
-const DEFAULT_LABEL_AREA_HEIGHT = 56; // base space under chart for x-axis title / labels
-const BASE_SCREEN_WIDTH = 375; // design reference width for scaling
+const DEFAULT_FLUSH_MS = 200;
+const DEFAULT_Y_AXIS_WIDTH = 40;
+const DEFAULT_LABEL_AREA_HEIGHT = 56;
+const BASE_SCREEN_WIDTH = 375;
 
 const PpmGraph = forwardRef(({
   externalData = null,
@@ -42,25 +42,22 @@ const PpmGraph = forwardRef(({
   topPadding = 50,
   chartConfig: userChartConfig,
   style,
-  flushMs = DEFAULT_FLUSH_MS, // kept for backward compatibility but default behaviour is immediate
+  flushMs = DEFAULT_FLUSH_MS,
   showAllTimestamps = true,
   containerColor = '#ffffff',
-  // axis title props
   xAxisTitle = 'Time',
   yAxisTitle = 'PPM',
   showAxisTitles = true,
   axisTitleFontSize = 12,
   axisTitleColor = '#0b1a1f',
-  // optional sizing overrides (base values; will be scaled)
   yAxisWidth = DEFAULT_Y_AXIS_WIDTH,
   labelAreaHeight = DEFAULT_LABEL_AREA_HEIGHT,
+  newestOnLeft = false, // NEW prop
 }, ref) => {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
-  // scale factor based on current width relative to a base width
   const widthScale = Math.max(0.6, Math.min(1.6, windowWidth / BASE_SCREEN_WIDTH));
 
-  // responsive computed sizes (you can still override the base props)
   const responsiveHeight = useMemo(() => {
     const minH = 160;
     const maxH = Math.max(280, Math.round(windowHeight * 0.45));
@@ -73,10 +70,9 @@ const PpmGraph = forwardRef(({
   const effectiveLabelAreaHeight = useMemo(() => Math.max(36, Math.round(labelAreaHeight * widthScale)), [labelAreaHeight, widthScale]);
   const effectiveAxisTitleFontSize = Math.max(10, Math.round(axisTitleFontSize * widthScale));
 
-  const [timesAll, setTimesAll] = useState([]); // HH:MM:SS strings
+  const [timesAll, setTimesAll] = useState([]); // HH:MM:SS strings (12-hour)
   const [valuesAll, setValuesAll] = useState([]); // numeric or null
 
-  // track last processed externalData length to append deltas
   const lastExternalLenRef = useRef(0);
   const scrollRef = useRef(null);
 
@@ -89,38 +85,41 @@ const PpmGraph = forwardRef(({
     },
   }), []);
 
-  // Process externalData deltas immediately (no periodic buffer flush)
+  // Process externalData deltas immediately
   useEffect(() => {
     if (!externalData || !Array.isArray(externalData)) return;
     const extLen = externalData.length;
     const lastLen = lastExternalLenRef.current;
 
-    // If data shrank (reset/new dataset), replace content entirely
+    // full replace when data shrinks
     if (extLen < lastLen) {
       const mapped = externalData.slice(-maxPoints).map(d => mapDatumToPoint(d));
-      const times = mapped.map(m => formatSmallTime(m.ts));
+      const times = mapped.map(m => formatSmallTime12(m.ts));
       const values = mapped.map(m => m.value);
       lastExternalLenRef.current = extLen;
       setTimesAll(times);
       setValuesAll(values);
-      // scroll to end so latest values visible
-      setTimeout(() => { try { scrollRef.current?.scrollToEnd?.({ animated: false }); } catch (e) {} }, 0);
+      // scroll to appropriate edge after render
+      setTimeout(() => {
+        try {
+          if (newestOnLeft) scrollRef.current?.scrollTo({ x: 0, animated: false });
+          else scrollRef.current?.scrollToEnd({ animated: false });
+        } catch (e) {}
+      }, 0);
       return;
     }
 
     if (extLen === lastLen) return;
 
-    // append the delta items immediately
+    // append delta
     const added = externalData.slice(lastLen);
     lastExternalLenRef.current = extLen;
-
     if (added.length === 0) return;
 
     const mapped = added.map(d => mapDatumToPoint(d));
-    const times = mapped.map(m => formatSmallTime(m.ts));
+    const times = mapped.map(m => formatSmallTime12(m.ts));
     const values = mapped.map(m => m.value);
 
-    // Functional updates to avoid stale state issues and keep performance reasonable
     setValuesAll(prevVals => {
       const next = [...prevVals, ...values];
       if (next.length > maxPoints) return next.slice(next.length - maxPoints);
@@ -132,9 +131,19 @@ const PpmGraph = forwardRef(({
       return next;
     });
 
-    // ensure the scroll follows new data immediately
-    setTimeout(() => { try { scrollRef.current?.scrollToEnd?.({ animated: true }); } catch (e) {} }, 0);
-  }, [externalData, maxPoints]);
+    // scroll to show newest on the appropriate side
+    setTimeout(() => {
+      try {
+        if (newestOnLeft) {
+          // show left side where newest lives
+          scrollRef.current?.scrollTo({ x: 0, animated: true });
+        } else {
+          // show right end where newest lives
+          scrollRef.current?.scrollToEnd({ animated: true });
+        }
+      } catch (e) {}
+    }, 0);
+  }, [externalData, maxPoints, newestOnLeft]);
 
   // Visible arrays (last renderPoints)
   const visibleValues = useMemo(() => {
@@ -149,18 +158,39 @@ const PpmGraph = forwardRef(({
 
   const hasData = visibleValues.length > 0;
 
-  // Chart sizing with cap & adaptive spacing (responsive)
+  // If newestOnLeft, reverse the visible arrays so newest is plotted at left
+  const plottedValues = useMemo(() => {
+    return newestOnLeft ? [...visibleValues].reverse() : visibleValues;
+  }, [visibleValues, newestOnLeft]);
+
+  const plottedTimes = useMemo(() => {
+    return newestOnLeft ? [...visibleTimes].reverse() : visibleTimes;
+  }, [visibleTimes, newestOnLeft]);
+
+  // Chart sizing — ensure minimum spacing between adjacent points
   const viewportWidth = Math.max(320, Math.round(windowWidth - 32));
-  const desiredWidth = Math.max(viewportWidth, Math.max(1, visibleValues.length) * effectivePointSpacing + 40);
-  let chartInnerWidth = Math.min(desiredWidth, MAX_CANVAS_WIDTH);
-  if (desiredWidth > MAX_CANVAS_WIDTH && visibleValues.length > 0) {
-    const spacing = Math.max(12, Math.floor((MAX_CANVAS_WIDTH - 40) / Math.max(1, visibleValues.length)));
-    chartInnerWidth = Math.max(viewportWidth, visibleValues.length * spacing + 40);
+  const gapSize = effectivePointSpacing; // gap to reserve on the "newest" side
+
+  // chartInnerWidth includes spacing for all points plus left/right reserved areas
+  // We'll always include at least one gap on the newest side and the axis reserve on the other
+  let chartInnerWidth;
+  if (newestOnLeft) {
+    // newest plotted on left; reserve gap on left via paddingLeft, but chart width must include normal spacing
+    chartInnerWidth = Math.max(
+      viewportWidth,
+      (plottedValues.length * effectivePointSpacing) + 40 + gapSize // gap included in content width
+    );
+  } else {
+    // newest on right; reserve gap on right via paddingRight
+    chartInnerWidth = Math.max(
+      viewportWidth,
+      (plottedValues.length * effectivePointSpacing) + 40 + gapSize
+    );
   }
 
-  // Indices to show timestamps
+  // Determine which indices to show time labels for (based on plottedTimes)
   const showTimeIndices = useMemo(() => {
-    const n = visibleTimes.length;
+    const n = plottedTimes.length;
     if (n === 0) return [];
     if (showAllTimestamps) return Array.from({ length: n }, (_, i) => i);
     const count = Math.min(maxXLabels, n);
@@ -170,21 +200,20 @@ const PpmGraph = forwardRef(({
     for (let i = 0; i < count; i++) idxs.push(Math.round(i * step));
     if (idxs[idxs.length - 1] !== n - 1) idxs.push(n - 1);
     return Array.from(new Set(idxs));
-  }, [visibleTimes, maxXLabels, showAllTimestamps]);
+  }, [plottedTimes, maxXLabels, showAllTimestamps]);
 
-  // Chart data for visible points
+  // Build chart data using plottedValues; labels empty (we draw labels manually)
   const chartData = useMemo(() => ({
-    labels: new Array(Math.max(1, visibleValues.length)).fill(''),
+    labels: new Array(Math.max(1, plottedValues.length)).fill(''),
     datasets: [
       {
-        data: hasData ? visibleValues.map(v => (v === null ? 0 : v)) : [0],
+        data: hasData ? plottedValues.map(v => (v === null ? 0 : v)) : [0],
         color: (opacity = 1) => `rgba(37,99,235,${opacity})`,
         strokeWidth: 2,
       },
     ],
-  }), [visibleValues, hasData]);
+  }), [plottedValues, hasData]);
 
-  // Light theme defaults with decimalPlaces = 2
   const lightChartConfig = useMemo(() => ({
     backgroundGradientFrom: '#ffffff',
     backgroundGradientTo: '#f3f7fb',
@@ -198,92 +227,81 @@ const PpmGraph = forwardRef(({
 
   const chartConfig = userChartConfig ? { ...lightChartConfig, ...userChartConfig } : lightChartConfig;
 
-  // render labels above/below each dot. Responsive font sizing and widths.
+  // Rotation angle for labels (keep consistent)
+  const ROT_ANGLE = -45;
+
+  // renderDotContent: uses plottedValues/plottedTimes
   const renderDotContent = ({ x, y, index }) => {
-    const v = visibleValues[index];
-    const t = visibleTimes[index];
+    const v = plottedValues[index];
+    const t = plottedTimes[index];
     if (typeof v === 'undefined' && !t) return null;
 
-    const showTime = showTimeIndices.includes(index);
-    const n = visibleValues.length;
-
-    // base sizes, then scale with widthScale
-    let labelWidth = 86;
-    let fontSizeTime = 10;
+    const n = plottedValues.length;
     let fontSizePpm = 11;
-    if (n > 120) { labelWidth = 56; fontSizeTime = 8; fontSizePpm = 9; }
-    else if (n > 80) { labelWidth = 64; fontSizeTime = 9; fontSizePpm = 10; }
+    if (n > 120) fontSizePpm = 9;
+    else if (n > 80) fontSizePpm = 10;
+    const scaledFontSizePpm = Math.max(8, Math.round(fontSizePpm * widthScale));
 
-    const scaledLabelWidth = Math.max(40, Math.round(labelWidth * widthScale));
+    let fontSizeTime = 10;
+    if (n > 120) fontSizeTime = 8;
+    else if (n > 80) fontSizeTime = 9;
     const scaledFontSizeTime = Math.max(8, Math.round(fontSizeTime * widthScale));
-    const scaledFontSizePpm = Math.max(9, Math.round(fontSizePpm * widthScale));
-
-    const pad = Math.max(3, Math.round(4 * widthScale));
-    const rectW = scaledLabelWidth + pad * 2;
-    const rectH = Math.max(14, Math.round(18 * widthScale));
 
     const ppmY = y - Math.max(12, Math.round(14 * widthScale));
-    const timeY = y + Math.max(22, Math.round(28 * widthScale));
+    const timeY = responsiveHeight + Math.floor(effectiveLabelAreaHeight * 0.35);
 
-    const rectFill = 'rgba(0,0,0,0.55)';
-    const ppmTextColor = '#ffffff';
-    const timeTextColor = '#ffffff';
+    const ppmTextColor = '#0b1a1f';
+    const timeTextColor = '#6b7280';
 
-    // Use two-decimal formatting for ppm value (match table)
     const ppmLabel = (v === null || typeof v === 'undefined' || Number.isNaN(Number(v))) ? '-' : Number(v).toFixed(2);
+    const showTime = showTimeIndices.includes(index);
 
     return (
       <Svg key={`label-${index}`} style={{ position: 'absolute', left: 0, top: 0 }}>
-        {v !== undefined && v !== null && (
-          <>
-            <Rect
-              x={x - rectW / 2}
-              y={ppmY - rectH + 2}
-              rx={6}
-              width={rectW}
-              height={rectH}
-              fill={rectFill}
-            />
-            <SvgText
-              x={x}
-              y={ppmY - 2}
-              fill={ppmTextColor}
-              fontSize={scaledFontSizePpm}
-              fontWeight="700"
-              textAnchor="middle"
-            >
-              {`${ppmLabel} PPM`}
-            </SvgText>
-          </>
+        {v !== undefined && (
+          <SvgText
+            x={x}
+            y={ppmY}
+            fill={ppmTextColor}
+            fontSize={scaledFontSizePpm}
+            textAnchor="middle"
+            transform={`rotate(${ROT_ANGLE} ${x} ${ppmY})`}
+            fontWeight="700"
+          >
+            {`${ppmLabel} PPM`}
+          </SvgText>
         )}
 
         {showTime && t && (
-          <>
-            <Rect
-              x={x - rectW / 2}
-              y={timeY - rectH / 2}
-              rx={6}
-              width={rectW}
-              height={rectH}
-              fill={rectFill}
-            />
-            <SvgText
-              x={x}
-              y={timeY + (scaledFontSizeTime / 2) + 2}
-              fill={timeTextColor}
-              fontSize={scaledFontSizeTime}
-              textAnchor="middle"
-            >
-              {t}
-            </SvgText>
-          </>
+          <SvgText
+            x={x}
+            y={timeY}
+            fill={timeTextColor}
+            fontSize={scaledFontSizeTime}
+            textAnchor="middle"
+            transform={`rotate(${ROT_ANGLE} ${x} ${timeY})`}
+          >
+            {t}
+          </SvgText>
         )}
       </Svg>
     );
   };
 
-  // Total wrapper height used to help center Y title vertically
   const wrapperHeight = responsiveHeight + effectiveLabelAreaHeight;
+
+  // Determine paddingLeft / paddingRight depending on newestOnLeft
+  let paddingLeft;
+  let paddingRight;
+  if (newestOnLeft) {
+    // Reserve gap on left (where newest appears)
+    paddingLeft = effectiveYAxisWidth + gapSize;
+    paddingRight = 12; // keep small trailing padding
+  } else {
+    // Reserve gap on right (where newest appears)
+    paddingLeft = effectiveYAxisWidth; // reserve Y axis width only
+    paddingRight = 12 + gapSize;
+  }
 
   return (
     <View
@@ -293,7 +311,7 @@ const PpmGraph = forwardRef(({
         style,
       ]}
     >
-      {/* Static Y axis title (does NOT scroll) */}
+      {/* Y axis title (static) */}
       {showAxisTitles && (
         <View
           style={{
@@ -321,16 +339,14 @@ const PpmGraph = forwardRef(({
         </View>
       )}
 
-      {/* Scrollable chart area */}
       <ScrollView
         horizontal
         ref={scrollRef}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{
-          // reserve left space for Y axis title so chart doesn't overlap it
           width: chartInnerWidth + effectiveYAxisWidth,
-          paddingRight: 12,
-          paddingLeft: effectiveYAxisWidth,
+          paddingRight,
+          paddingLeft,
         }}
       >
         <View style={{ width: chartInnerWidth, height: responsiveHeight + effectiveLabelAreaHeight }}>
@@ -346,19 +362,19 @@ const PpmGraph = forwardRef(({
               paddingBottom: effectiveLabelAreaHeight,
               paddingTop: topPadding,
             }}
-            withInnerLines={true}
+            withInnerLines
             withOuterLines={false}
-            fromZero={true}
+            fromZero
             segments={4}
             renderDotContent={renderDotContent}
             withDots={hasData}
-            formatXLabel={() => ''}
-            formatYLabel={hasData ? (y => `${y}`) : (() => '')}
+            formatXLabel={() => ''} // we render times manually
+            formatYLabel={() => ''} // remove y-axis numeric labels
           />
         </View>
       </ScrollView>
 
-      {/* Static X axis title (centered, does NOT scroll) */}
+      {/* Static X axis title (centered) */}
       {showAxisTitles && (
         <View
           style={{
@@ -391,34 +407,31 @@ const PpmGraph = forwardRef(({
 export default PpmGraph;
 
 /* Helpers */
-function formatSmallTime(iso) {
+function formatSmallTime12(iso) {
   if (!iso) return '';
   const d = (iso instanceof Date) ? iso : new Date(iso);
   if (isNaN(d.getTime())) return String(iso);
-  const hh = String(d.getHours()).padStart(2, '0');
+  let hours = d.getHours();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const hh = String(hours).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
+  return `${hh}:${mm}:${ss} ${ampm}`;
 }
 
 function mapDatumToPoint(d) {
   if (!d) return { ts: null, value: null };
   const ts = d.ts ?? d.TIMESTAMP ?? null;
   const raw = (typeof d.value !== 'undefined') ? d.value : (d.rawValue ?? d.VALUE ?? null);
-
-  // Keep numeric conversion simple and robust:
-  // If raw is numeric already, use it. If it's a string that can convert to number, use Number(raw).
-  // If empty or not a number, use null.
   let value = null;
-  if (raw === null || raw === undefined) {
-    value = null;
-  } else if (typeof raw === 'number') {
-    value = raw;
-  } else {
+  if (raw === null || raw === undefined) value = null;
+  else if (typeof raw === 'number') value = raw;
+  else {
     const parsed = Number(raw);
     value = Number.isNaN(parsed) ? null : parsed;
   }
-
   return { ts, value };
 }
 

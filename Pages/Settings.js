@@ -22,8 +22,8 @@ export default function SettingsPage({ route, navigation }) {
   const [saving, setSaving] = useState(false);
 
   // Static backend host
-  const HOST_IP = '3.227.99.254:3006';
-  const BASE = `http://${HOST_IP}`;
+  const HOST_IP = 'boreal-2.soniciot.com';
+  const BASE = `https://${HOST_IP}`;
 
   useEffect(() => {
     if (!serialNumber) return;
@@ -162,12 +162,12 @@ export default function SettingsPage({ route, navigation }) {
           <View style={styles.centerWrapper}>
             <View style={styles.card}>
               {/* Visible label change only */}
-              <Text style={styles.title}>Gas Finder-PPM Threshold</Text>
+              <Text style={styles.title}>PPM-M-LO Threshold</Text>
 
               {loading && <ActivityIndicator size="small" color="#fff" style={{ marginVertical: 12 }} />}
 
               <View style={styles.fieldRow}>
-                <Text style={styles.label}>Gas Finder-PPM</Text>
+                <Text style={styles.label}>PPM-M-LO</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="numeric"

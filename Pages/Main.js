@@ -50,7 +50,7 @@ const IndicatorApp = ({ route, navigation }) => {
   // Client-side running clock (real local time)
   const [currentTime, setCurrentTime] = useState(formatTime(new Date()));
 
-  const indicatorBigLabel = 'Gas Finder-PPM'; // Big indicator label (PPM)
+  const indicatorBigLabel = 'PPM-M-LO'; // Big indicator label (PPM)
 
   const pickHost = () => {
     if (hostOverride) return hostOverride;
@@ -149,8 +149,8 @@ const IndicatorApp = ({ route, navigation }) => {
   // SOCKET: same as before, populate tableData (PPM rows) and update indicator.
   useEffect(() => {
     if (!serialNumber) return undefined;
-    const host = '3.227.99.254:3006';
-    const socketUrl = `http://${host}`;
+    const host = 'boreal-2.soniciot.com';
+    const socketUrl = `https://${host}`;
     const socket = io(socketUrl, {
       reconnection: true,
       reconnectionAttempts: 5,
@@ -227,6 +227,10 @@ const IndicatorApp = ({ route, navigation }) => {
     // ---- MQTT message handling (parent) ----
     socket.on('mqtt_message', (msg) => {
       if (!isFocusedRef.current) return;
+      console.log('MQTT msg topic:', msg.topic || msg._topic);
+      console.log('MQTT keys:', Object.keys(msg || {}));
+      console.log('Possible serial fields:', msg.serial_number, msg.serialNumber, msg.serial, msg.payload && (msg.payload.serial_number || msg.payload.serial));
+      console.log('Full message (truncated):', JSON.stringify(msg).slice(0, 1000));
 
       let serverReceivedAt = null;
       if (msg.received_at) {
@@ -334,7 +338,7 @@ const IndicatorApp = ({ route, navigation }) => {
     // initial ping fetch
     (async () => {
       try {
-        const res = await fetch(`http://3.227.99.254:3006/api/ping/${serialNumber}`);
+        const res = await fetch(`https://boreal-2.soniciot.com/api/ping/${serialNumber}`);
         if (res.ok) {
           const body = await res.json();
           const online = body && (body.status === 'online' || body.online === true || body.isOnline === true);
@@ -346,7 +350,7 @@ const IndicatorApp = ({ route, navigation }) => {
     // threshold fetch
     (async () => {
       try {
-        const response = await fetch(`http://3.227.99.254:3006/api/thresholds/${serialNumber}`);
+        const response = await fetch(`https://boreal-2.soniciot.com/api/thresholds/${serialNumber}`);
         if (response.ok) {
           const data = await response.json();
           const losRaw = (data && typeof data === 'object') ? (data.los_ppm ?? data.losPpm ?? data.los_ppm_value ?? null) : null;
@@ -697,7 +701,6 @@ const styles = StyleSheet.create({
   },
   topSettings: {
     marginRight: 8,
-    marginTop: 6,
     padding: 6,
   },
 
