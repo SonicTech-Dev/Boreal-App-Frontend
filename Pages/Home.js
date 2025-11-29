@@ -39,7 +39,7 @@ export default function App({ navigation }) {
                     <Text style={styles.buttonText}>Go to Main Page</Text>
                 </TouchableOpacity>
 
-                <Text style={styles.version}>V1.68  2025</Text>
+                <Text style={styles.version}>V2.68  2025</Text>
                 <Text style={styles.subText}>Powered by SONIC</Text>
             </SafeAreaView>
         </ImageBackground>
