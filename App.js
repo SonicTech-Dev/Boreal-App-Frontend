@@ -209,7 +209,6 @@ export default function App() {
         } catch {}
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Effect: re-check when app comes to foreground (helps when user enables notifications in Settings)
