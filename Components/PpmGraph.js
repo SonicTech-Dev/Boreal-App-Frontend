@@ -13,18 +13,11 @@ import Svg, { Text as SvgText } from 'react-native-svg';
 /**
  * PpmGraph - supports gap on the side where new data appears (newestOnLeft)
  *
- * Additions:
- * - Prop newestOnLeft (default false). If true, newest points are shown on the left
- *   (we reverse visible data for plotting) and the visual gap is placed on the left side.
- *   If false (default) newest is on the right and the gap is placed on the right.
- * - The chartData and labels are built from plottedValues/plottedTimes which are reversed
- *   when newestOnLeft is true.
- * - Scroll behavior: when new data arrive, if newestOnLeft is false we scrollToEnd,
- *   otherwise we scrollTo({ x: 0 }) so newest is visible on the left with the gap.
- * - Trailing/leading gap logic adjusted based on newestOnLeft.
- *
- * Usage:
- * <PpmGraph externalData={data} newestOnLeft={true} ... />
+ * Changes in this version:
+ * - Restores showing the PPM value label for every plotted point (as before).
+ * - Keeps previous improvements: responsive scaling, extra bottom padding so X title
+ *   doesn't overlap rotated time labels, and Y title rendered inside scrollable content
+ *   so it moves with the chart.
  */
 
 const DEFAULT_FLUSH_MS = 200;
@@ -52,10 +45,11 @@ const PpmGraph = forwardRef(({
   axisTitleColor = '#0b1a1f',
   yAxisWidth = DEFAULT_Y_AXIS_WIDTH,
   labelAreaHeight = DEFAULT_LABEL_AREA_HEIGHT,
-  newestOnLeft = false, // NEW prop
+  newestOnLeft = false,
 }, ref) => {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
+  // responsiveness scale
   const widthScale = Math.max(0.6, Math.min(1.6, windowWidth / BASE_SCREEN_WIDTH));
 
   const responsiveHeight = useMemo(() => {
@@ -70,8 +64,11 @@ const PpmGraph = forwardRef(({
   const effectiveLabelAreaHeight = useMemo(() => Math.max(36, Math.round(labelAreaHeight * widthScale)), [labelAreaHeight, widthScale]);
   const effectiveAxisTitleFontSize = Math.max(10, Math.round(axisTitleFontSize * widthScale));
 
-  const [timesAll, setTimesAll] = useState([]); // HH:MM:SS strings (12-hour)
-  const [valuesAll, setValuesAll] = useState([]); // numeric or null
+  // Extra bottom padding so "Time" title doesn't collide with x-axis readings
+  const extraBottomPadding = Math.max(8, Math.round(12 * widthScale));
+
+  const [timesAll, setTimesAll] = useState([]);
+  const [valuesAll, setValuesAll] = useState([]);
 
   const lastExternalLenRef = useRef(0);
   const scrollRef = useRef(null);
@@ -99,7 +96,6 @@ const PpmGraph = forwardRef(({
       lastExternalLenRef.current = extLen;
       setTimesAll(times);
       setValuesAll(values);
-      // scroll to appropriate edge after render
       setTimeout(() => {
         try {
           if (newestOnLeft) scrollRef.current?.scrollTo({ x: 0, animated: false });
@@ -131,14 +127,11 @@ const PpmGraph = forwardRef(({
       return next;
     });
 
-    // scroll to show newest on the appropriate side
     setTimeout(() => {
       try {
         if (newestOnLeft) {
-          // show left side where newest lives
           scrollRef.current?.scrollTo({ x: 0, animated: true });
         } else {
-          // show right end where newest lives
           scrollRef.current?.scrollToEnd({ animated: true });
         }
       } catch (e) {}
@@ -167,26 +160,14 @@ const PpmGraph = forwardRef(({
     return newestOnLeft ? [...visibleTimes].reverse() : visibleTimes;
   }, [visibleTimes, newestOnLeft]);
 
-  // Chart sizing — ensure minimum spacing between adjacent points
+  // Chart sizing
   const viewportWidth = Math.max(320, Math.round(windowWidth - 32));
   const gapSize = effectivePointSpacing; // gap to reserve on the "newest" side
 
-  // chartInnerWidth includes spacing for all points plus left/right reserved areas
-  // We'll always include at least one gap on the newest side and the axis reserve on the other
-  let chartInnerWidth;
-  if (newestOnLeft) {
-    // newest plotted on left; reserve gap on left via paddingLeft, but chart width must include normal spacing
-    chartInnerWidth = Math.max(
-      viewportWidth,
-      (plottedValues.length * effectivePointSpacing) + 40 + gapSize // gap included in content width
-    );
-  } else {
-    // newest on right; reserve gap on right via paddingRight
-    chartInnerWidth = Math.max(
-      viewportWidth,
-      (plottedValues.length * effectivePointSpacing) + 40 + gapSize
-    );
-  }
+  let chartInnerWidth = Math.max(
+    viewportWidth,
+    (plottedValues.length * effectivePointSpacing) + 40 + gapSize
+  );
 
   // Determine which indices to show time labels for (based on plottedTimes)
   const showTimeIndices = useMemo(() => {
@@ -227,7 +208,7 @@ const PpmGraph = forwardRef(({
 
   const chartConfig = userChartConfig ? { ...lightChartConfig, ...userChartConfig } : lightChartConfig;
 
-  // Rotation angle for labels (keep consistent)
+  // Rotation angle for labels
   const ROT_ANGLE = -45;
 
   // renderDotContent: uses plottedValues/plottedTimes
@@ -247,8 +228,11 @@ const PpmGraph = forwardRef(({
     else if (n > 80) fontSizeTime = 9;
     const scaledFontSizeTime = Math.max(8, Math.round(fontSizeTime * widthScale));
 
+    // y for ppm label: place it a bit above the point
     const ppmY = y - Math.max(12, Math.round(14 * widthScale));
-    const timeY = responsiveHeight + Math.floor(effectiveLabelAreaHeight * 0.35);
+
+    // time label Y: place below chart area but above axis title — use effectiveLabelAreaHeight + extraBottomPadding
+    const timeY = responsiveHeight + Math.floor((effectiveLabelAreaHeight + extraBottomPadding) * 0.35);
 
     const ppmTextColor = '#0b1a1f';
     const timeTextColor = '#6b7280';
@@ -256,6 +240,7 @@ const PpmGraph = forwardRef(({
     const ppmLabel = (v === null || typeof v === 'undefined' || Number.isNaN(Number(v))) ? '-' : Number(v).toFixed(2);
     const showTime = showTimeIndices.includes(index);
 
+    // Show the PPM reading for every plotted point (restored to previous behavior)
     return (
       <Svg key={`label-${index}`} style={{ position: 'absolute', left: 0, top: 0 }}>
         {v !== undefined && (
@@ -288,89 +273,81 @@ const PpmGraph = forwardRef(({
     );
   };
 
-  const wrapperHeight = responsiveHeight + effectiveLabelAreaHeight;
+  const wrapperHeight = responsiveHeight + effectiveLabelAreaHeight + extraBottomPadding;
 
-  // Determine paddingLeft / paddingRight depending on newestOnLeft
-  let paddingLeft;
-  let paddingRight;
-  if (newestOnLeft) {
-    // Reserve gap on left (where newest appears)
-    paddingLeft = effectiveYAxisWidth + gapSize;
-    paddingRight = 12; // keep small trailing padding
-  } else {
-    // Reserve gap on right (where newest appears)
-    paddingLeft = effectiveYAxisWidth; // reserve Y axis width only
-    paddingRight = 12 + gapSize;
-  }
+  // When the Y axis title is rendered inside the ScrollView content, compute paddings excluding the axis width.
+  const contentTotalWidth = effectiveYAxisWidth + chartInnerWidth;
+  const contentPaddingLeft = newestOnLeft ? gapSize : 0;
+  const contentPaddingRight = newestOnLeft ? 12 : (gapSize + 12);
 
   return (
     <View
       style={[
         styles.container,
-        { backgroundColor: containerColor, minHeight: topPadding + responsiveHeight + effectiveLabelAreaHeight },
+        { backgroundColor: containerColor, minHeight: topPadding + responsiveHeight + effectiveLabelAreaHeight + extraBottomPadding },
         style,
       ]}
     >
-      {/* Y axis title (static) */}
-      {showAxisTitles && (
-        <View
-          style={{
-            position: 'absolute',
-            left: 6,
-            top: topPadding + (wrapperHeight - topPadding - effectiveLabelAreaHeight) / 2,
-            height: responsiveHeight,
-            width: effectiveYAxisWidth,
-            alignItems: 'center',
-            justifyContent: 'center',
-            pointerEvents: 'none',
-            zIndex: 2,
-          }}
-        >
-          <Text
-            style={{
-              transform: [{ rotate: '-90deg' }],
-              color: axisTitleColor,
-              fontWeight: '600',
-              fontSize: effectiveAxisTitleFontSize,
-            }}
-          >
-            {yAxisTitle}
-          </Text>
-        </View>
-      )}
-
       <ScrollView
         horizontal
         ref={scrollRef}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{
-          width: chartInnerWidth + effectiveYAxisWidth,
-          paddingRight,
-          paddingLeft,
+          width: contentTotalWidth,
+          paddingLeft: contentPaddingLeft,
+          paddingRight: contentPaddingRight,
         }}
       >
-        <View style={{ width: chartInnerWidth, height: responsiveHeight + effectiveLabelAreaHeight }}>
-          <LineChart
-            data={chartData}
-            width={chartInnerWidth}
-            height={responsiveHeight}
-            chartConfig={chartConfig}
-            bezier
-            style={{
-              borderRadius: 12,
-              marginBottom: 0,
-              paddingBottom: effectiveLabelAreaHeight,
-              paddingTop: topPadding,
-            }}
-            withInnerLines
-            withOuterLines={false}
-            fromZero
-            segments={4}
-            renderDotContent={renderDotContent}
-            withDots={hasData}
-            formatXLabel={() => ''} // we render times manually
-            formatYLabel={() => ''} // remove y-axis numeric labels
-          />
+        {/* Row container so Y axis title is part of the scrollable content and thus moves with the chart */}
+        <View style={{ width: contentTotalWidth, flexDirection: 'row', height: wrapperHeight }}>
+          {/* Y axis title inside scrollable content (so it scrolls) */}
+          {showAxisTitles && (
+            <View
+              style={{
+                width: effectiveYAxisWidth,
+                alignItems: 'center',
+                justifyContent: 'center',
+                pointerEvents: 'none',
+                zIndex: 2,
+              }}
+            >
+              <Text
+                style={{
+                  transform: [{ rotate: '-90deg' }],
+                  color: axisTitleColor,
+                  fontWeight: '600',
+                  fontSize: effectiveAxisTitleFontSize,
+                }}
+              >
+                {yAxisTitle}
+              </Text>
+            </View>
+          )}
+
+          {/* Chart area */}
+          <View style={{ width: chartInnerWidth, height: responsiveHeight + effectiveLabelAreaHeight + extraBottomPadding }}>
+            <LineChart
+              data={chartData}
+              width={chartInnerWidth}
+              height={responsiveHeight}
+              chartConfig={chartConfig}
+              bezier
+              style={{
+                borderRadius: 12,
+                marginBottom: 0,
+                paddingBottom: effectiveLabelAreaHeight + extraBottomPadding,
+                paddingTop: topPadding,
+              }}
+              withInnerLines
+              withOuterLines={false}
+              fromZero
+              segments={4}
+              renderDotContent={renderDotContent}
+              withDots={hasData}
+              formatXLabel={() => ''}
+              formatYLabel={() => ''}
+            />
+          </View>
         </View>
       </ScrollView>
 
@@ -380,7 +357,7 @@ const PpmGraph = forwardRef(({
           style={{
             position: 'absolute',
             left: 0,
-            top: topPadding + responsiveHeight,
+            top: topPadding + responsiveHeight + Math.round(extraBottomPadding / 2),
             width: '100%',
             height: effectiveLabelAreaHeight,
             alignItems: 'center',
