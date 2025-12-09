@@ -237,7 +237,7 @@ const PpmGraph = forwardRef(({
     const ppmTextColor = '#0b1a1f';
     const timeTextColor = '#6b7280';
 
-    const ppmLabel = (v === null || typeof v === 'undefined' || Number.isNaN(Number(v))) ? '-' : Number(v).toFixed(2);
+    const ppmLabel = (v === null || typeof v === 'undefined' || Number.isNaN(Number(v))) ? '-' : String(v);
     const showTime = showTimeIndices.includes(index);
 
     // Show the PPM reading for every plotted point (restored to previous behavior)

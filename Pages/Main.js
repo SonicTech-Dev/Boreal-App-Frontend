@@ -416,9 +416,8 @@ const IndicatorApp = ({ route, navigation }) => {
 
   // Render row functions (updated to show two decimals)
   const renderRow = ({ item }) => {
-    const rawVal = item.rawValue;
-    const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
-    const displayValue = !Number.isNaN(numeric) ? `${numeric.toFixed(2)} PPM` : String(item.VALUE);
+    const numeric = (typeof item.rawValue !== 'undefined' && item.rawValue !== null) ? item.rawValue : item.VALUE;
+    const displayValue = String(numeric) + ' PPM';
 
     const valueStyle = (threshold !== null && !Number.isNaN(numeric) && numeric > threshold)
       ? { color: '#b10303', fontWeight: '700' }
@@ -433,9 +432,8 @@ const IndicatorApp = ({ route, navigation }) => {
   };
 
   const renderAlarmRow = ({ item }) => {
-    const rawVal = item.rawValue;
-    const numeric = (typeof rawVal === 'number') ? rawVal : Number(rawVal);
-    const displayValue = !Number.isNaN(numeric) ? `${numeric.toFixed(2)} PPM` : String(item.VALUE);
+    const numeric = (typeof item.rawValue !== 'undefined' && item.rawValue !== null) ? item.rawValue : item.VALUE;
+    const displayValue = String(numeric) + ' PPM';
 
     const valueStyle = (threshold !== null && !Number.isNaN(numeric) && numeric > threshold)
       ? { color: '#b10303', fontWeight: '700' }
@@ -541,7 +539,7 @@ const IndicatorApp = ({ route, navigation }) => {
           </View>
           <Text style={{ color: 'white', fontSize: 20, marginTop: 10 }}>{indicatorBigLabel}</Text>
           <Text style={{ color: indicatorColor, fontSize: 36, fontWeight: 'bold' }}>
-            {losReading !== null ? (Number.isFinite(Number(losReading)) ? Number(losReading).toFixed(2) : String(losReading)) : '-'}
+            {losReading !== null && typeof losReading !== 'undefined' ? String(losReading) : '-'}
           </Text>
         </View>
 
