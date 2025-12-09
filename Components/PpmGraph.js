@@ -357,7 +357,7 @@ const PpmGraph = forwardRef(({
           style={{
             position: 'absolute',
             left: 0,
-            top: topPadding + responsiveHeight + Math.round(extraBottomPadding / 2),
+            top: topPadding + responsiveHeight + Math.round(extraBottomPadding / 0.5),
             width: '100%',
             height: effectiveLabelAreaHeight,
             alignItems: 'center',

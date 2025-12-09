@@ -1,4 +1,4 @@
-package com.boreal
+package com.boreal2
 
 import android.app.Application
 import com.facebook.react.PackageList

@@ -1,4 +1,4 @@
-package com.boreal
+package com.boreal2
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

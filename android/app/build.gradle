@@ -15,9 +15,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.boreal"
+    namespace "com.boreal2"
     defaultConfig {
-        applicationId "com.boreal"
+        applicationId "com.boreal2"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
