@@ -54,7 +54,7 @@ const IndicatorApp = ({ route, navigation }) => {
 
   const pickHost = () => {
     if (hostOverride) return hostOverride;
-    const defaultHost = 'boreal.soniciot.com';
+    const defaultHost = 'boreal-2.soniciot.com';
     if (Platform.OS === 'android') {
       return defaultHost;
     }
