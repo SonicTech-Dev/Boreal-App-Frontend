@@ -47,6 +47,11 @@ const IndicatorApp = ({ route, navigation }) => {
   // Track whether this screen is focused (visible) so we only read/process messages while mounted/visible
   const isFocusedRef = useRef(false);
 
+  // REF to reflect current connectionState for use inside socket handlers to avoid stale closures.
+  // This is the main change: we will use this ref to determine if the device is ONLINE and
+  // only process/render incoming sensor readings after the device reports online.
+  const connectionRef = useRef(connectionState);
+
   // Client-side running clock (real local time)
   const [currentTime, setCurrentTime] = useState(formatTime(new Date()));
 
@@ -112,6 +117,11 @@ const IndicatorApp = ({ route, navigation }) => {
   useEffect(() => {
     losReadingRef.current = losReading;
   }, [losReading]);
+
+  // Keep connectionRef in sync with connectionState (so socket handlers can read latest online status)
+  useEffect(() => {
+    connectionRef.current = connectionState;
+  }, [connectionState]);
 
   // Track screen focus state
   useEffect(() => {
@@ -209,6 +219,7 @@ const IndicatorApp = ({ route, navigation }) => {
           }
         }
         // clear table and graph on threshold update so UI refreshes
+        // NOTE: keep original behavior but this won't cause readings to render while device offline
         setTableData([]);
         setGraphExternalData([]);
       } catch (e) {}
@@ -226,7 +237,18 @@ const IndicatorApp = ({ route, navigation }) => {
 
     // ---- MQTT message handling (parent) ----
     socket.on('mqtt_message', (msg) => {
+      // IMPORTANT: ignore incoming sensor readings until the device is known to be ONLINE.
+      // This prevents the race where MQTT payloads arrive before the backend ping status,
+      // which previously caused readings to render briefly while the UI still showed OFFLINE.
       if (!isFocusedRef.current) return;
+
+      const isOnline = connectionRef.current && connectionRef.current.color === '#16b800';
+      if (!isOnline) {
+        // ignore readings until device reports online
+        // console.log('Ignoring mqtt_message because device is not online yet for', serialNumber);
+        return;
+      }
+
       console.log('MQTT msg topic:', msg.topic || msg._topic);
       console.log('MQTT keys:', Object.keys(msg || {}));
       console.log('Possible serial fields:', msg.serial_number, msg.serialNumber, msg.serial, msg.payload && (msg.payload.serial_number || msg.payload.serial));
